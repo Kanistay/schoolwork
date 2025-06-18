@@ -1,0 +1,3888 @@
+-- Temel değişkenler
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local autorob = false
+local autosell = false
+local camstop = false
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+local UserInputService = game:GetService("UserInputService")
+local RobberyZoomValue = 10 -- Soygun sırasında kullanılacak zoom değeri
+local CurrentBombs = 0 -- Mevcut bomba sayısı
+local gasregion = CFrame.new(-1366.52893, 3.77958393, 3018.23291, 0.999665797, 0.02563053, -0.00337082823, -0.0256738216, 0.999579251, -0.0134970928, 0.00302347238, 0.0135791246, 0.999903202)
+local contaregion = CFrame.new(884.397522, 7.29635715, 2237.14722, -0.0124400863, 4.35332549e-06, -0.999922633, 0.000363848143, 0.99999994, -1.72990525e-07, 0.999922574, -0.000363822153, -0.0124400873)
+local aresregion = CFrame.new(-843.817322, 6.44403267, 1256.11328, -0.014433668, -0.0142262159, 0.999794602, 0.0288901459, 0.99947542, 0.0146387508, -0.9994784, 0.0290955026, -0.0140150981)
+local ossoregion = CFrame.new(-798.729309, 6.44730186, -1599.99268, -0.681672812, 0.0291705783, -0.731075406, 0.0241710097, 0.999557376, 0.0173456036, 0.731257796, -0.00584680447, -0.682076156)
+local ProximityPromptTimeBet = 2.5
+local locktime = 100
+local dedectdistance = 35
+local healthdecrease = 15
+-- lastVisitedDealer değişkeni kaldırıldı (artık en yakın dealer kullanılıyor)
+-- maxDealerSearchDistance değişkeni kaldırıldı (artık her zaman en yakın dealer kullanılıyor)
+
+-- RemoteEvent 's
+local RemoteEvents = {
+    BombEquip = game:GetService("ReplicatedStorage"):WaitForChild("ZDD"):WaitForChild("03b49302-a5f2-4604-918e-098bfbdeb34f"),
+    PlaceBomb = game:GetService("ReplicatedStorage"):WaitForChild("ZDD"):WaitForChild("0a1f4dda-460b-4e6a-bfa9-013100966edd"),
+    FireBomb = game:GetService("ReplicatedStorage"):WaitForChild("ZDD"):WaitForChild("47846492-29e7-479d-a56b-142092e1f01b"),
+    BuyItem = game:GetService("ReplicatedStorage"):WaitForChild("ZDD"):WaitForChild("5b3ef461-b1c2-4c63-88d4-ffa5b326bbe0"),
+    SellItem = game:GetService("ReplicatedStorage"):WaitForChild("ZDD"):WaitForChild("78a4a458-c960-45b5-b213-1763c5c28b38"),
+    CollectMoney = game:GetService("ReplicatedStorage"):WaitForChild("ZDD"):WaitForChild("06a54218-5ca6-4f03-88b7-a7157db417f4")
+}
+local MONEY_COLLECT_CODE = "5ZA"
+
+-- Health tracking for each robbery location
+local healthTracking = {
+    lastHealth = 100,
+    damagedLocation = nil
+}
+
+-- Function to check player health and reset if below 25
+function checkHealthAndReset()
+    local character = LocalPlayer.Character
+    if character and character:FindFirstChildOfClass("Humanoid") then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid.Health < 25 then
+            print("⚠️ Sağlık 25'in altında! Karakter resetleniyor...")
+            humanoid.Health = 0
+            task.wait(5) -- Respawn için bekle
+            return true
+        end
+    end
+    return false
+end
+
+-- Police detection function
+function detectPolice(robberyType)
+    local character = LocalPlayer.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then
+        return false
+    end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return false
+    end
+    
+    -- Store current health for comparison
+    local currentHealth = humanoid.Health
+    
+    -- If this is a new robbery type after we took damage in a previous one,
+    -- reset the health tracking so we don't carry over damage detection
+    if healthTracking.damagedLocation ~= nil and healthTracking.damagedLocation ~= robberyType then
+        healthTracking.lastHealth = currentHealth
+        healthTracking.damagedLocation = nil
+    end
+    
+    -- Calculate health loss for this specific robbery
+    local healthLoss = healthTracking.lastHealth - currentHealth
+    
+    -- Check for significant health decrease (exceeding threshold)
+    if healthLoss >= healthdecrease then
+        print("⚠️ Significant health decrease detected! Health loss: " .. math.floor(healthLoss) .. ". Stopping robbery.")
+        lockRobbery(robberyType)
+        
+        -- Mark this location as the one where we took damage
+        healthTracking.damagedLocation = robberyType
+        
+        -- Return to the appropriate region based on robbery type
+        if robberyType == "Club" or robberyType == "Bank" or robberyType == "Gasngo" then
+            print("Returning to gas region...")
+            frameTween(gasregion)
+        elseif robberyType == "Containerye" or robberyType == "Containergre" then
+            print("Returning to container region...")
+            frameTween(contaregion)
+        elseif robberyType == "Ares" or robberyType == "Tool" then
+            print("Returning to ares region...")
+            frameTween(aresregion)
+        elseif robberyType == "Osso" or robberyType == "Farm" or robberyType == "Clothing" then
+            print("Returning to osso region...")
+            frameTween(ossoregion)
+        end
+        
+        return true
+    end
+    
+    -- Update the last health value for next comparison
+    healthTracking.lastHealth = currentHealth
+    
+    -- Check for nearby police
+    local rootPart = character.HumanoidRootPart
+    for _, player in pairs(game:GetService("Players"):GetPlayers()) do
+        if player ~= LocalPlayer then
+            -- Check if player is police
+            if player.Team and player.Team.Name == "Police" then
+                local playerCharacter = player.Character
+                if playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart") then
+                    local distance = (playerCharacter.HumanoidRootPart.Position - rootPart.Position).Magnitude
+                    if distance <= dedectdistance then
+                        print("🚨 Police detected nearby! Distance: " .. math.floor(distance) .. " studs. Stopping robbery.")
+                        lockRobbery(robberyType)
+                        
+                        -- Return to the appropriate region based on robbery type
+                        if robberyType == "Club" or robberyType == "Bank" or robberyType == "Gasngo" then
+                            print("Returning to gas region...")
+                            frameTween(gasregion)
+                        elseif robberyType == "Containerye" or robberyType == "Containergre" then
+                            print("Returning to container region...")
+                            frameTween(contaregion)
+                        elseif robberyType == "Ares" or robberyType == "Tool" then
+                            print("Returning to ares region...")
+                            frameTween(aresregion)
+                        elseif robberyType == "Osso" or robberyType == "Farm" or robberyType == "Clothing" then
+                            print("Returning to osso region...")
+                            frameTween(ossoregion)
+                        end
+                        
+                        return true
+                    end
+                end
+            end
+        end
+    end
+    
+    return false
+end
+
+-- Function to lock the robbery based on type
+function lockRobbery(robberyType)
+    if robberyType == "Club" then
+        clublock = true
+        clubLockTime = os.time()
+        print("Club robbery locked for " .. locktime .. " seconds.")
+    elseif robberyType == "Bank" then
+        banklock = true
+        bankLockTime = os.time()
+        print("Bank robbery locked for " .. locktime .. " seconds.")
+    elseif robberyType == "Gasngo" then
+        gasngolock = true
+        gasngoLockTime = os.time()
+        print("Gas-n-Go robbery locked for " .. locktime .. " seconds.")
+    elseif robberyType == "Containergre" then
+        containergrelock = true
+        containergreLockTime = os.time()
+        print("Green Container robbery locked for " .. locktime .. " seconds.")
+    elseif robberyType == "Containerye" then
+        containeryellock = true
+        containeryelLockTime = os.time()
+        print("Yellow Container robbery locked for " .. locktime .. " seconds.")
+    elseif robberyType == "Tool" then
+        toollock = true
+        toolLockTime = os.time()
+        print("Tool Shop robbery locked for " .. locktime .. " seconds.")
+    elseif robberyType == "Clothing" then
+        clothinglock = true
+        clothingLockTime = os.time()
+        print("Clothing Store robbery locked for " .. locktime .. " seconds.")
+    elseif robberyType == "Ares" then
+        areslock = true
+        aresLockTime = os.time()
+        print("Ares robbery locked for " .. locktime .. " seconds.")
+    elseif robberyType == "Farm" then
+        farmlock = true
+        farmLockTime = os.time()
+        print("Farm robbery locked for " .. locktime .. " seconds.")
+    elseif robberyType == "Osso" then
+        ossolock = true
+        ossoLockTime = os.time()
+        print("Osso robbery locked for " .. locktime .. " seconds.")
+    end
+end
+
+-- Header function for managing the robbery system
+function header()
+    -- Başlangıçta bomba sayısını kontrol et, sadece Gas ve Container bölgeleri için bomba gerekiyor
+    -- Sonraki bölümlerde her bölgeye girmeden önce de kontrol edilecek
+    local bombCount = getBombCount()
+    
+    -- Eğer bomba sayısı 3'ten azsa, en yakın dealer'a git ve bomba satın al
+    if bombCount < 3 then
+        print("Başlangıçta bomba sayısı kontrol ediliyor...")
+        print("Bomba sayısı yetersiz (" .. bombCount .. "/3), en yakın dealera gidiliyor...")
+        
+        local dealer = findNearestDealer()
+        
+        if dealer then
+            -- Dealer'a git
+            frameTween(dealer.Head.CFrame)
+            
+            -- Bomba satın al ve eşyaları sat
+            buyBombAndSell(3 - bombCount)
+            task.wait(0.5)
+        else
+            -- Eğer dealer bulunamazsa, yine de Gas bölgesine git
+            print("Dealer bulunamadı, Gas bölgesine devam ediliyor...")
+        end
+    else
+        print("Başlangıçta bomba sayısı yeterli (" .. bombCount .. "/3), robbery döngüsü başlatılıyor...")
+    end
+    
+    -- Robbery döngüsünü başlat
+    startRobberyCycle()
+end
+
+-- Function to update health tracking at the start of a robbery
+function updateHealthTracking()
+    local character = LocalPlayer.Character
+    if character and character:FindFirstChildOfClass("Humanoid") then
+        healthTracking.lastHealth = character:FindFirstChildOfClass("Humanoid").Health
+    end
+end
+
+-- Function to find the nearest dealer
+function findNearestDealer()
+    local character = LocalPlayer.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then
+        return nil
+    end
+    
+    local rootPart = character.HumanoidRootPart
+    local dealersFolder = workspace:FindFirstChild("Dealers")
+    if not dealersFolder then
+        return nil
+    end
+    
+    local closestDealer = nil
+    local shortestDistance = math.huge
+    
+    for _, dealer in ipairs(dealersFolder:GetChildren()) do
+        if dealer:IsA("Model") and dealer:FindFirstChild("Head") then
+            local distance = (dealer.Head.Position - rootPart.Position).Magnitude
+            if distance < shortestDistance then
+                shortestDistance = distance
+                closestDealer = dealer
+            end
+        end
+    end
+    
+    return closestDealer
+end
+
+-- Function to continuously cycle between regions for robberies
+function startRobberyCycle()
+    while true do
+        -- Update locks in case any have expired
+        updateLocks()
+        
+        -- BÖLGE 1: GAS REGION - Tüm gas bölgesi soygunlarını dene
+        local gasRegionDone = false
+        
+        -- Gas bölgesine girmeden önce bomba sayısını kontrol et
+        local bombCount = getBombCount()
+        if bombCount < 3 then
+            print("Gas bölgesine girmeden önce bomba sayısı kontrol ediliyor...")
+            print("Bomba sayısı yetersiz (" .. bombCount .. "/3), en yakın dealera gidiliyor...")
+            local dealer = findNearestDealer()
+            if dealer then
+                frameTween(dealer.Head.CFrame)
+                buyBombAndSell(3 - bombCount)
+                task.wait(0.5)
+            end
+        end
+        
+        while not gasRegionDone do
+            -- Gas bölgesine git
+            print("Gas bölgesi kontrol ediliyor...")
+            frameTween(gasregion)
+            task.wait(0.5)
+            local club, bank, gasngo = cgas()
+            
+            -- Önce Bank'i dene (en yüksek öncelik)
+            if bank and not banklock then
+                BankRob()
+                task.wait(0.5)
+            -- Sonra Club'ı dene
+            elseif club and not clublock then
+                ClubRob()
+                task.wait(0.5)
+            -- Son olarak Gas-n-Go'yu dene
+            elseif gasngo and not gasngolock then
+                GasngoRob()
+                task.wait(0.5)
+            else
+                -- Gas bölgesinde soyulacak yer kalmadı
+                gasRegionDone = true
+                print("Gas bölgesinde soyulacak yer kalmadı, container bölgesine geçiliyor...")
+            end
+        end
+        
+        -- BÖLGE 2: CONTAINER REGION - Tüm container bölgesi soygunlarını dene
+        local containerRegionDone = false
+        
+        -- Container bölgesine girmeden önce bomba sayısını kontrol et
+        bombCount = getBombCount()
+        if bombCount < 3 then
+            print("Container bölgesine girmeden önce bomba sayısı kontrol ediliyor...")
+            print("Bomba sayısı yetersiz (" .. bombCount .. "/3), en yakın dealera gidiliyor...")
+            local dealer = findNearestDealer()
+            if dealer then
+                frameTween(dealer.Head.CFrame)
+                buyBombAndSell(3 - bombCount)
+                task.wait(0.5)
+            end
+        end
+        
+        while not containerRegionDone do
+            -- Container bölgesine git
+            print("Container bölgesi kontrol ediliyor...")
+            frameTween(contaregion)
+            task.wait(0.5)
+            local containeryel, containergre = cconta()
+            
+            -- Önce Yellow Container'ı dene (öncelikli)
+            if containeryel and not containeryellock then
+                ContaineryelRob()
+                task.wait(0.5)
+            -- Sonra Green Container'ı dene
+            elseif containergre and not containergrelock then
+                ContainergreRob()
+                task.wait(0.5)
+            else
+                -- Container bölgesinde soyulacak yer kalmadı
+                containerRegionDone = true
+                print("Container bölgesinde soyulacak yer kalmadı, ares bölgesine geçiliyor...")
+            end
+        end
+        
+        -- BÖLGE 3: ARES REGION - Tüm ares bölgesi soygunlarını dene
+        local aresRegionDone = false
+        
+        while not aresRegionDone do
+            -- Bomba kontrolü kaldırıldı (Ares bölgesinde bomba kullanılmıyor)
+            
+            -- Ares bölgesine git
+            print("Ares bölgesi kontrol ediliyor...")
+            frameTween(aresregion)
+            task.wait(0.5)
+            local ares, tool = cares()
+            
+            -- Önce Ares'i dene (öncelikli)
+            if ares and not areslock then
+                AresRob()
+                task.wait(0.5)
+            -- Sonra Tool'u dene
+            elseif tool and not toollock then
+                ToolRob()
+                task.wait(0.5)
+            else
+                -- Ares bölgesinde soyulacak yer kalmadı
+                aresRegionDone = true
+                print("Ares bölgesinde soyulacak yer kalmadı, osso bölgesine geçiliyor...")
+            end
+        end
+        
+        -- BÖLGE 4: OSSO REGION - Tüm osso bölgesi soygunlarını dene
+        local ossoRegionDone = false
+        
+        while not ossoRegionDone do
+            -- Bomba kontrolü kaldırıldı (Osso bölgesinde bomba kullanılmıyor)
+            
+            -- Osso bölgesine git
+            print("Osso bölgesi kontrol ediliyor...")
+            fixedY = 2
+            frameTween(ossoregion)
+            fixedY = -1.9
+            task.wait(0.5)
+            local farm, osso, clothing = cosso()
+            
+            -- Önce Farm'ı dene (öncelikli)
+            if farm and not farmlock then
+                FarmRob()
+                task.wait(0.5)
+            -- Sonra Osso'yu dene
+            elseif osso and not ossolock then
+                OssoRob()
+                task.wait(0.5)
+            -- Son olarak Clothing'i dene
+            elseif clothing and not clothinglock then
+                ClothingRob()
+                task.wait(0.5)
+            else
+                -- Osso bölgesinde soyulacak yer kalmadı
+                ossoRegionDone = true
+                print("Osso bölgesinde soyulacak yer kalmadı, yeniden gas bölgesine dönülüyor...")
+            end
+        end
+        
+        -- Eğer hiçbir bölgede soyulacak yer kalmadıysa, server hop dene
+        print("Hiçbir bölgede soyulacak yer kalmadı. Server hop deneniyor...")
+        hopServer()
+        -- Server hop başarısız olursa biraz bekle
+        task.wait(10)
+    end
+end
+
+-- Function to check and perform gas region robberies
+function checkGasRegion()
+    -- Go to gas region
+    frameTween(gasregion)
+    task.wait(0.5)
+    
+    -- Check which robbery locations are available
+    local clubAvailable, bankAvailable, gasngoAvailable = cgas()
+    
+    -- Check if any locations are available and not locked
+    if bankAvailable and not banklock then
+        -- Bank has highest priority
+        BankRob()
+        return true
+    elseif clubAvailable and not clublock then
+        -- Club has second priority
+        ClubRob()
+        return true
+    elseif gasngoAvailable and not gasngolock then
+        -- Gas-n-Go has lowest priority
+        GasngoRob()
+        return true
+    end
+    
+    -- No gas region robberies available
+    return false
+end
+
+-- Function to check and perform container region robberies
+function checkContainerRegion()
+    -- Check if we have enough bombs for container robberies
+    local bombCount = getBombCount()
+    if bombCount < 3 then
+        print("Need more bombs for container robberies.")
+        return false
+    end
+
+    -- Go to container region
+    frameTween(contaregion)
+    task.wait(0.5)
+    
+    -- Check which container robberies are available
+    local containeryelAvailable, containergreAvailable = cconta()
+    
+    -- Check if any locations are available and not locked
+    if containeryelAvailable and not containeryellock then
+        -- Yellow container has priority
+        ContaineryelRob()
+        return true
+    elseif containergreAvailable and not containergrelock then
+        -- Green container has second priority
+        ContainergreRob()
+        return true
+    end
+    
+    -- No container region robberies available
+    return false
+end
+
+-- Function to check and perform ares region robberies
+function checkAresRegion()
+    -- Check if we have enough bombs for ares robberies
+    local bombCount = getBombCount()
+    if bombCount < 3 then
+        print("Need more bombs for ares robberies.")
+        return false
+    end
+    
+    -- Go to ares region
+    frameTween(aresregion)
+    task.wait(0.5)
+    
+    -- Check which ares robberies are available
+    local aresAvailable, toolAvailable = cares()
+    
+    -- Check if any locations are available and not locked
+    if aresAvailable and not areslock then
+        -- Ares has priority
+        AresRob()
+        return true
+    elseif toolAvailable and not toollock then
+        -- Tool has second priority
+        ToolRob()
+        return true
+    end
+    
+    -- No ares region robberies available
+    return false
+end
+
+-- Function to check and perform osso region robberies
+function checkOssoRegion()
+    -- Check if we have enough bombs for osso robberies
+    local bombCount = getBombCount()
+    if bombCount < 3 then
+        print("Need more bombs for osso robberies.")
+        return false
+    end
+    
+    -- Go to osso region
+    frameTween(ossoregion)
+    task.wait(0.5)
+    
+    -- Check which osso robberies are available
+    local farmAvailable, ossoAvailable, clothingAvailable = cosso()
+    
+    -- Check if any locations are available and not locked
+    if farmAvailable and not farmlock then
+        -- Farm has priority
+        FarmRob()
+        return true
+    elseif ossoAvailable and not ossolock then
+        -- Osso has second priority
+        OssoRob()
+        return true
+    elseif clothingAvailable and not clothinglock then
+        -- Clothing has lowest priority
+        ClothingRob()
+        return true
+    end
+    
+    -- No osso region robberies available
+    return false
+end
+
+
+
+
+---------------------------------------------------------------------------------
+function cosso()
+    -- Önce kilitleri güncelle
+    updateLocks()
+
+    -- Farm kontrolü
+local success, farmObj = pcall(function()
+    return workspace.Robberies["Farm Shop Robbery"]["Farm Shop"].MoneyTray
+end)
+
+if success and farmObj then
+    -- Verilen hedef CFrame
+    local targetCFrame = CFrame.new(-961.383362, 7.36743832, -1177, 0, 0, 1, 0, 1, 0, -1, 0, 0)
+
+    -- farmObj'nin CFrame'ini alıyoruz
+    local farmCFrame = farmObj.CFrame
+
+    -- Tam CFrame eşleşmesi
+    if farmCFrame == targetCFrame then
+        farm = true
+    else
+        farm = false
+    end
+else
+    farm = false
+end
+
+
+    -- Osso kontrolü
+    local success2, ossoObj = pcall(function()
+        return workspace.Robberies["Osso Fuel Station Robbery"]["Osso Fuel Station"].MoneyTray
+    end)
+    
+    if success2 and ossoObj then
+        -- Verilen hedef CFrame
+        local targetCFrame = CFrame.new(-80.0498047, 5.25518656, -780.373901, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+    
+        -- ossoObj'nin CFrame'ini alıyoruz
+        local ossoCFrame = ossoObj.CFrame
+    
+        -- Tam CFrame eşleşmesi
+        if ossoCFrame == targetCFrame then
+            osso = true
+        else
+            osso = false
+        end
+    else
+        osso = false
+    end
+    
+
+    -- Clothing kontrolü
+    local success3, clothingObj = pcall(function()
+        return workspace.Robberies["Clothing Store Robbery"]["Clothing Store"].MoneyTray
+    end)
+    
+    if success3 and clothingObj then
+        -- Verilen hedef CFrame
+        local targetCFrame = CFrame.new(472.149292, 5.15978765, -1406.59155, 0, 0, 1, 0, 1, 0, -1, 0, 0)
+    
+        -- clothingObj'nin CFrame'ini alıyoruz
+        local clothingCFrame = clothingObj.CFrame
+    
+        -- Tam CFrame eşleşmesi
+        if clothingCFrame == targetCFrame then
+            clothing = true
+        else
+            clothing = false
+        end
+    else
+        clothing = false
+    end
+    
+
+    return farm, osso, clothing
+end
+
+
+
+
+---------------------------------------------------------------------------------
+function cares()
+    -- Önce kilitleri güncelle
+    updateLocks()
+
+    -- Önce değişkenleri sıfırla
+    ares = false
+    tool = false
+
+    -- Ares kontrolü
+    local targetCFrame = CFrame.new(
+        -841.482483, 5.07732582, 1532.29358, 
+         0, 0, -1, 
+         0, 1,  0, 
+         1, 0,  0
+    )
+    
+    local success, aresObj = pcall(function()
+        return workspace.Robberies["Ares Fuel Station Robbery"]["Ares Fuel Station"].MoneyTray
+    end)
+    
+    if success and aresObj and aresObj:IsA("BasePart") then
+        if aresObj.CFrame == targetCFrame and not aresLocked then
+            ares = true
+            print("✅ Ares soygunu mümkün")
+        else
+            print("❌ Ares soygunu mümkün değil - MoneyTray pozisyonu yanlış veya kilitli")
+        end
+    else
+        print("❌ Ares soygunu mümkün değil - MoneyTray bulunamadı")
+    end
+
+    -- Tool kontrolü
+    local targetToolCFrame = CFrame.new(
+        -756.375, 5.52618742, 628.139771,
+         1, 0, 0,
+         0, 1, 0,
+         0, 0, 1
+    )
+
+    local success2, toolObj = pcall(function()
+        return workspace.Robberies["Tool Shop Robbery"]["Tool Shop"].MoneyTray
+    end)
+
+    if success2 and toolObj and toolObj:IsA("BasePart") then
+        if toolObj.CFrame == targetToolCFrame then
+            tool = true
+            print("✅ Tool soygunu mümkün")
+        else
+            print("❌ Tool soygunu mümkün değil - MoneyTray pozisyonu yanlış")
+        end
+    else
+        print("❌ Tool soygunu mümkün değil - MoneyTray bulunamadı")
+    end
+
+    return ares, tool
+end
+
+
+
+
+
+
+
+----------------------------
+function cconta()
+    -- Önce kilitleri güncelle
+    updateLocks()
+
+    -- Önce değişkenleri sıfırla
+    containeryel = false
+    containergre = false
+
+    -- ContainerYel kontrolü
+    local success4, containerModel = pcall(function()
+        return workspace.Robberies.ContainerRobberies:GetChildren()[2]
+    end)
+
+    if success4 and containerModel and containerModel:FindFirstChild("Barricade") then
+        local barricade = containerModel.Barricade
+        local part = barricade:GetChildren()[4]
+
+        if part and part:IsA("BasePart") and part.Transparency == 1 and not containeryelLocked then
+            containeryel = true
+            print("✅ ContainerYel soygunu mümkün")
+        else
+            print("❌ ContainerYel soygunu mümkün değil - Barricade kapalı veya kilitli")
+        end
+    else
+        print("❌ ContainerYel soygunu mümkün değil - Model bulunamadı")
+    end
+
+    -- ContainerGre kontrolü
+    local success5, containerModel = pcall(function()
+        return workspace.Robberies.ContainerRobberies.ContainerRobbery
+    end)
+
+    if success5 and containerModel and containerModel:FindFirstChild("Barricade") then
+        local barricade = containerModel.Barricade
+        local part = barricade:GetChildren()[4]
+
+        if part and part:IsA("BasePart") and part.Transparency == 1 and not containergreLocked then
+            containergre = true
+            print("✅ ContainerGre soygunu mümkün")
+        else
+            print("❌ ContainerGre soygunu mümkün değil - Barricade kapalı veya kilitli")
+        end
+    else
+        print("❌ ContainerGre soygunu mümkün değil - Model bulunamadı")
+    end
+
+    return containeryel, containergre
+end
+
+
+
+-------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------
+function cgas()
+    -- Önce kilitleri güncelle
+    updateLocks()
+
+    local expectedCFrame = CFrame.new(
+    -1744.05078, 11.3275862, 3010.18188,
+    -1, 0, 0,
+    0, 1, 0,
+    0, 0, -1
+)
+
+local success, metalPart = pcall(function()
+    return workspace.Robberies["Club Robbery"].Club.Door.Accessory.Metal
+end)
+
+if success and metalPart and metalPart:IsA("BasePart") then
+    if metalPart.CFrame == expectedCFrame then
+        club = true
+    else
+        club = false
+    end
+else
+    club = false
+end
+
+
+    -- Bank kontrolü
+    local success2, bankLight = pcall(function()
+        return workspace.Robberies.BankRobbery.LightGreen.Light
+    end)
+    if success2 and bankLight then
+        if bankLight.Enabled and not banklock then
+            bank = true
+        else
+            bank = false
+        end
+    else
+        bank = false
+    end
+
+    -- Gas-N-Go kontrolü
+    local success3, moneyTray = pcall(function()
+        return workspace.Robberies["Gas-N-Go Fuel Station Robbery"]["Gas-N-Go Fuel Station"].MoneyTray
+    end)
+    if success3 and moneyTray then
+        local targetCFrame = CFrame.new(
+            Vector3.new(-1524.49194, 6.00749016, 3763),
+            Vector3.new(-1.1920929e-07, 0, 1.00000012)
+        )
+        -- Direkt eşitlik kıyaslaması yerine biraz toleranslı (float hatası için)
+        if (moneyTray.CFrame.Position - Vector3.new(-1524.49194, 6.00749016, 3763)).Magnitude < 0.1 and not gasngolock then
+            gasngo = true
+        else
+            gasngo = false
+        end
+    else
+        gasngo = false
+    end
+
+    return club, bank, gasngo
+end
+
+------------------------------------------------------------checkers for rob possible or not
+
+function buyBombAndSell(count)
+    local Players = game:GetService("Players")
+    local player = Players.LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+     
+    -- En yakın dealer'ı bul (findNearestDealer fonksiyonunu kullanarak)
+    local closestDealer = findNearestDealer()
+
+    if closestDealer then 
+        -- Dealer'ın kafasının 2 birim üstüne git
+        frameTween(closestDealer.Head.CFrame + Vector3.new(0, -2, 0))
+    
+        -- Sadece dealer için: Karakterin Y'sini dealer'ın Head.Y'sine ayarla
+        local char = player.Character or player.CharacterAdded:Wait()
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local pos = char.HumanoidRootPart.Position
+            local dealerY = closestDealer.Head.Position.Y
+            local orientation = char.HumanoidRootPart.Orientation
+            char.HumanoidRootPart.CFrame = CFrame.new(pos.X, dealerY, pos.Z) * CFrame.Angles(
+                math.rad(orientation.X),
+                math.rad(orientation.Y),
+                math.rad(orientation.Z)
+            )
+        end
+    
+        -- Belirtilen sayıda bomba satın al
+        for i = 1, count do
+            local args = {
+                [1] = "Bomb",
+                [2] = "Dealer"
+            }
+            RemoteEvents.BuyItem:FireServer(unpack(args))
+        end
+    
+        -- Tüm item'ları sat
+        local itemsToSell = {"Gold", "M58B Shotgun", "MP5", "Glock 17", "Machete"}
+        for _, item in ipairs(itemsToSell) do
+            local sellArgs = {
+                [1] = item,
+                [2] = "Dealer"
+            }
+            RemoteEvents.SellItem:FireServer(unpack(sellArgs))
+        end
+    end
+end
+
+
+
+----------------------------------------------------------
+----------------------------------------------------------bomb buy and sell items thing
+
+
+--------------------------------------------------
+local function bombequip()
+    print("Bomba ekipmanı alınıyor...")
+    local args = {
+        [1] = "Bomb"
+    }
+    RemoteEvents.BombEquip:FireServer(unpack(args))
+end
+---------------------------------------------bombequp()
+
+local function getNil(name, class)
+    for _, v in next, getnilinstances() do
+        if v.ClassName == class and v.Name == name then
+            return v
+        end
+    end
+end
+
+local function getCharacter(player)
+    local character = player.Character
+    if character and character.Parent then
+        return character
+    end
+
+    local char = player.CharacterAdded:Wait()
+    repeat task.wait() until char.Parent
+    return char
+end
+
+local function placebomb()
+    print("Bomba yerleştiriliyor...")
+
+    local character = LocalPlayer.Character
+    if not character then
+        warn("Karakter bulunamadı!")
+        return false
+    end
+
+    local tool = character:FindFirstChild("Bomb") or LocalPlayer.Backpack:FindFirstChild("Bomb")
+    if not tool then
+        warn("Tool 'Bomb' not found in Character or Backpack!")
+        return false
+    end
+
+    RemoteEvents.PlaceBomb:FireServer(tool)
+    return true
+end
+
+
+--------------------------------------------placebomb()
+
+local function firebomb()
+    print("Bomba patlatılıyor...")
+    RemoteEvents.FireBomb:FireServer()
+end
+
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+
+local CurrentBombs = 0
+local BombCheckInterval = 0.5 -- Kaç saniyede bir kontrol etsin (ayarlanabilir)
+
+function getBombCount()
+    local playerGui = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+    local screenGui = nil
+    local bombCount = 0
+
+    -- DisplayOrder 32 olan ScreenGui'yi bul
+    for _, gui in ipairs(playerGui:GetChildren()) do
+        if gui:IsA("ScreenGui") and gui.DisplayOrder == 32 then
+            screenGui = gui
+            break
+        end
+    end
+
+    if not screenGui then
+        return 0
+    end
+
+    -- Bomba sayısını bul - daha esnek bir yaklaşım
+    for _, descendant in ipairs(screenGui:GetDescendants()) do
+        if descendant:IsA("ImageLabel") then
+            -- Bomb image'ı olabilecek herhangi bir ImageLabel
+            local parent = descendant.Parent
+            if parent then
+                for _, child in ipairs(parent:GetChildren()) do
+                    if child:IsA("TextLabel") then
+                        local number = tonumber(child.Text)
+                        if number then
+                            -- Sayı bulundu, muhtemelen bomba sayısı
+                            bombCount = number
+                            return bombCount -- Hemen dön
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return bombCount
+end
+
+-- Bomba sayısını sürekli kontrol eden fonksiyon
+local function startBombChecker()
+    task.spawn(function()
+        while true do
+            local newBombCount = getBombCount()
+            if newBombCount ~= CurrentBombs then
+                CurrentBombs = newBombCount
+            end
+            task.wait(0.5)
+        end
+    end)
+end
+
+-- Oyun başladığında bomba kontrolcüsünü başlat
+startBombChecker()
+------------------------------------------------------------------------------bomb checker
+------------------------------------------------------------------------------bomb checker
+
+
+local TweenService = game:GetService("TweenService")
+
+local function plrTween(targetCFrame)
+    local plr = game.Players.LocalPlayer
+    local char = plr.Character or plr.CharacterAdded:Wait()
+
+    if not char.PrimaryPart then
+        warn("Karakterin PrimaryPart'i yok.")
+        return
+    end
+
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid:ChangeState(Enum.HumanoidStateType.Running)
+    end
+
+    local speed = 50
+    local distance = (char.PrimaryPart.Position - targetCFrame.Position).Magnitude
+    local duration = distance / speed
+
+    local startCFrame = char:GetPivot()
+
+    -- Tween bilgileri
+    local tweenInfo = TweenInfo.new(
+        duration,
+        Enum.EasingStyle.Linear,
+        Enum.EasingDirection.Out
+    )
+
+    -- Başlangıç yönünü hedef yönle hizala
+    char:PivotTo(CFrame.new(startCFrame.Position, targetCFrame.Position))
+    task.wait(0.1)
+
+    -- Tween için CFrameValue oluştur
+    local tweenValue = Instance.new("CFrameValue")
+    tweenValue.Value = startCFrame
+
+    tweenValue.Changed:Connect(function(newCFrame)
+        -- Hareket ederken orijinal targetCFrame yönünü koruyarak ilerle
+        char:PivotTo(CFrame.new(newCFrame.Position, newCFrame.Position + targetCFrame.LookVector))
+    end)
+
+    local tween = TweenService:Create(tweenValue, tweenInfo, { Value = targetCFrame })
+    tween:Play()
+    tween.Completed:Wait()
+
+    -- Son pozisyon ve yön tam olarak hedefle aynı
+    char:PivotTo(targetCFrame)
+
+    print("Karakter hedef CFrame'e ulaştı:", targetCFrame.Position)
+    tweenValue:Destroy()
+end
+
+
+------------------------------------------------------------------------player tween
+------------------------------------------------------------------------player tween   örnek kullanım plrTween(CFrame.new(x, y, z))
+
+
+
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+-- Modelin 'PrimaryPart'ını ayarlama fonksiyonu
+local function setPrimaryPart(vehicleModel)
+	local body = vehicleModel:FindFirstChild("Body")
+	if body then
+		local mass = body:FindFirstChild("Mass")
+		if mass then
+			vehicleModel.PrimaryPart = mass
+			return mass
+		else
+			warn("Body modelinin içinde 'Mass' parçası bulunamadı.")
+		end
+	else
+		warn("Araç modelinde 'Body' modeli bulunamadı.")
+	end
+	return nil
+end
+
+-- Sabit hızla tween yapmak için fonksiyon
+local function createTween(targetInstance, startCFrame, endCFrame, speed)
+	local distance = (endCFrame.Position - startCFrame.Position).Magnitude
+	local duration = distance / speed
+
+	local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
+	local tweenValue = Instance.new("CFrameValue")
+	tweenValue.Value = startCFrame
+
+	tweenValue.Changed:Connect(function()
+		if targetInstance:IsA("Model") then
+			targetInstance:PivotTo(tweenValue.Value)
+		else
+			targetInstance.CFrame = tweenValue.Value
+		end
+	end)
+
+	local tween = TweenService:Create(tweenValue, tweenInfo, {Value = endCFrame})
+	tween:Play()
+	return tween
+end
+
+-- frameTween(CFrame.new(...)) şeklinde kullanım
+
+
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+_G.flightSpeed = 180 -- Default speed
+
+-----------------------------------------------
+-----------------------------------------------
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+
+local minSpeed = 120
+local maxSpeed = 190
+
+-- FPS ölçümü
+local fps = 50
+RunService.RenderStepped:Connect(function(deltaTime)
+	fps = math.floor(1 / deltaTime)
+end)
+
+-- Ping (RTT) ölçümü (ms cinsinden)
+local function getPing()
+	local dataPing = Stats:FindFirstChild("Network"):FindFirstChild("Ping")
+	if dataPing then
+		return dataPing:GetValue()
+	end
+	return 100 -- varsayılan ping
+end
+
+-- Uçuş hızını güncelle
+task.spawn(function()
+	while true do
+		local currentPing = getPing()
+		local pingFactor = math.clamp(1 - (currentPing / 300), 0, 1) -- yüksek ping = yavaşlat
+
+		local fpsFactor = math.clamp(fps / 60, 0.5, 1.2) -- düşük fps = yavaşlat
+
+		local adjustedSpeed = math.clamp(minSpeed * fpsFactor * pingFactor, minSpeed, maxSpeed)
+
+		_G.flightSpeed = math.floor(adjustedSpeed)
+
+		task.wait(1) -- her saniye bir kez kontrol et
+	end
+end)
+-----------------------------------------------
+-----------------------------------------------
+
+-- frameTween(CFrame.new(...)) şeklinde kullanım
+function frameTween(targetCFrame)
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+    if not vehiclesFolder then
+        warn("Vehicles klasörü bulunamadı.")
+        return
+    end
+
+    local vehicle = vehiclesFolder:FindFirstChild(player.Name)
+    if not vehicle then
+        warn("Oyuncuya ait araç bulunamadı.")
+        return
+    end
+
+    local driveSeat = vehicle:FindFirstChild("DriveSeat")
+    if not driveSeat or not driveSeat:IsA("Seat") then
+        warn("DriveSeat bulunamadı veya uygun değil.")
+        return
+    end
+
+    if not vehicle.PrimaryPart then
+        local body = vehicle:FindFirstChild("Body")
+        if body then
+            local mass = body:FindFirstChild("Mass")
+            if mass then
+                vehicle.PrimaryPart = mass
+            else
+                warn("Body içinde 'Mass' bulunamadı.")
+                return
+            end
+        else
+            warn("Araç içinde 'Body' bulunamadı.")
+            return
+        end
+    end
+
+    driveSeat:Sit(humanoid)
+    task.wait(0.1)
+
+    -- bringcar çağrısını kaldırıyoruz, çünkü dışarıdan çağrılacak
+    -- NOT: Eğer bringcar fonksiyonunu kullanmak istiyorsanız, frameTween çağırmadan önce
+    -- ayrıca bringcar() çağırın
+
+    local originalProps = {}
+    for _, part in pairs(vehicle:GetDescendants()) do
+        if part:IsA("BasePart") then
+            originalProps[part] = {
+                Velocity = part.Velocity,
+                RotVelocity = part.RotVelocity,
+                AssemblyLinearVelocity = part.AssemblyLinearVelocity,
+                AssemblyAngularVelocity = part.AssemblyAngularVelocity
+            }
+            part.Velocity = Vector3.zero
+            part.RotVelocity = Vector3.zero
+            part.AssemblyLinearVelocity = Vector3.zero
+            part.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+
+    local function createTween(startCF, endCF, isVertical)
+        local distance = (endCF.Position - startCF.Position).Magnitude
+        local speed = isVertical and (_G.flightSpeed / 2) or _G.flightSpeed -- Dikey hareket için hızı yarıya indir
+        local duration = distance / speed
+
+        local cframe = Instance.new("CFrameValue")
+        cframe.Value = startCF
+
+        cframe.Changed:Connect(function()
+            if vehicle.PrimaryPart then
+                vehicle:SetPrimaryPartCFrame(cframe.Value)
+
+                for _, part in pairs(vehicle:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Velocity = Vector3.zero
+                        part.RotVelocity = Vector3.zero
+                        part.AssemblyLinearVelocity = Vector3.zero
+                        part.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+            end
+        end)
+
+        local tween = TweenService:Create(cframe, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut), {
+            Value = endCF
+        })
+
+        return tween, cframe
+    end
+
+    local function smoothMove(startCF, endCF, isVertical)
+        local tween, cframe = createTween(startCF, endCF, isVertical)
+        tween:Play()
+        tween.Completed:Wait()
+        cframe:Destroy()
+
+        if humanoid.SeatPart ~= driveSeat then
+            driveSeat:Sit(humanoid)
+            task.wait(0.1)
+        end
+    end
+
+    -- Sabit Y değerinde hareket
+    local startCF = vehicle.PrimaryPart.CFrame
+    local fixedY = -1.9 -- Sabit Y değeri
+    local targetPosition = Vector3.new(targetCFrame.Position.X, fixedY, targetCFrame.Position.Z)
+    local finalTarget = CFrame.new(targetPosition, targetPosition + targetCFrame.LookVector)
+
+    print("🚗 Sabit Y değerinde hareket başlıyor...")
+    smoothMove(startCF, finalTarget, false) -- Yatay hareket için normal hız
+    task.wait(0.2)
+
+    -- İkinci aşama: Hedef Y değerine direkt geçiş
+    smoothMove(vehicle.PrimaryPart.CFrame, finalTarget, true) -- Dikey hareket için yarı hız
+
+    for part, props in pairs(originalProps) do
+        if part and part.Parent then
+            part.Velocity = props.Velocity
+            part.RotVelocity = props.RotVelocity
+            part.AssemblyLinearVelocity = props.AssemblyLinearVelocity
+            part.AssemblyAngularVelocity = props.AssemblyAngularVelocity
+        end
+    end
+
+    vehicle:SetPrimaryPartCFrame(finalTarget)
+    driveSeat:Sit(humanoid)
+
+    print("✅ Araç hedefe başarıyla ulaştı.")
+end
+
+
+------------------------------------------------------------------------player tween
+------------------------------------------------------------------------player tween   örnek kullanım plrTween(CFrame.new(x, y, z))
+
+
+
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+_G.flightSpeed = 190 -- Default speed
+
+-----------------------------------------------
+-----------------------------------------------
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+
+local minSpeed = 170
+local maxSpeed = 240
+
+-- FPS ölçümü
+local fps = 60
+RunService.RenderStepped:Connect(function(deltaTime)
+	fps = math.floor(1 / deltaTime)
+end)
+
+-- Ping (RTT) ölçümü (ms cinsinden)
+local function getPing()
+	local dataPing = Stats:FindFirstChild("Network"):FindFirstChild("Ping")
+	if dataPing then
+		return dataPing:GetValue()
+	end
+	return 100 -- varsayılan ping
+end
+
+-- Uçuş hızını güncelle
+task.spawn(function()
+	while true do
+		local currentPing = getPing()
+		local pingFactor = math.clamp(1 - (currentPing / 300), 0, 1) -- yüksek ping = yavaşlat
+
+		local fpsFactor = math.clamp(fps / 60, 0.5, 1.2) -- düşük fps = yavaşlat
+
+		local adjustedSpeed = math.clamp(minSpeed * fpsFactor * pingFactor, minSpeed, maxSpeed)
+
+		_G.flightSpeed = math.floor(adjustedSpeed)
+
+		task.wait(1) -- her saniye bir kez kontrol et
+	end
+end)
+-----------------------------------------------
+-----------------------------------------------
+
+-- frameTween(CFrame.new(...)) şeklinde kullanım
+function frameTween(targetCFrame)
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+    if not vehiclesFolder then
+        warn("Vehicles klasörü bulunamadı.")
+        return
+    end
+
+    local vehicle = vehiclesFolder:FindFirstChild(player.Name)
+    if not vehicle then
+        warn("Oyuncuya ait araç bulunamadı.")
+        return
+    end
+
+    local driveSeat = vehicle:FindFirstChild("DriveSeat")
+    if not driveSeat or not driveSeat:IsA("Seat") then
+        warn("DriveSeat bulunamadı veya uygun değil.")
+        return
+    end
+
+    if not vehicle.PrimaryPart then
+        local body = vehicle:FindFirstChild("Body")
+        if body then
+            local mass = body:FindFirstChild("Mass")
+            if mass then
+                vehicle.PrimaryPart = mass
+            else
+                warn("Body içinde 'Mass' bulunamadı.")
+                return
+            end
+        else
+            warn("Araç içinde 'Body' bulunamadı.")
+            return
+        end
+    end
+
+    driveSeat:Sit(humanoid)
+    task.wait(0.1)
+
+    -- bringcar çağrısını kaldırıyoruz, çünkü dışarıdan çağrılacak
+    -- NOT: Eğer bringcar fonksiyonunu kullanmak istiyorsanız, frameTween çağırmadan önce
+    -- ayrıca bringcar() çağırın
+
+    local originalProps = {}
+    for _, part in pairs(vehicle:GetDescendants()) do
+        if part:IsA("BasePart") then
+            originalProps[part] = {
+                Velocity = part.Velocity,
+                RotVelocity = part.RotVelocity,
+                AssemblyLinearVelocity = part.AssemblyLinearVelocity,
+                AssemblyAngularVelocity = part.AssemblyAngularVelocity
+            }
+            part.Velocity = Vector3.zero
+            part.RotVelocity = Vector3.zero
+            part.AssemblyLinearVelocity = Vector3.zero
+            part.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+
+    local function createTween(startCF, endCF, isVertical)
+        local distance = (endCF.Position - startCF.Position).Magnitude
+        local speed = isVertical and (_G.flightSpeed / 2) or _G.flightSpeed -- Dikey hareket için hızı yarıya indir
+        local duration = distance / speed
+
+        local cframe = Instance.new("CFrameValue")
+        cframe.Value = startCF
+
+        cframe.Changed:Connect(function()
+            if vehicle.PrimaryPart then
+                vehicle:SetPrimaryPartCFrame(cframe.Value)
+
+                for _, part in pairs(vehicle:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Velocity = Vector3.zero
+                        part.RotVelocity = Vector3.zero
+                        part.AssemblyLinearVelocity = Vector3.zero
+                        part.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+            end
+        end)
+
+        local tween = TweenService:Create(cframe, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut), {
+            Value = endCF
+        })
+
+        return tween, cframe
+    end
+
+    local function smoothMove(startCF, endCF, isVertical)
+        local tween, cframe = createTween(startCF, endCF, isVertical)
+        tween:Play()
+        tween.Completed:Wait()
+        cframe:Destroy()
+
+        if humanoid.SeatPart ~= driveSeat then
+            driveSeat:Sit(humanoid)
+            task.wait(0.1)
+        end
+    end
+
+    -- Sabit Y değerinde hareket
+    local startCF = vehicle.PrimaryPart.CFrame
+    local fixedY = -1.80769644 -- Sabit Y değeri
+    local targetPosition = Vector3.new(targetCFrame.Position.X, fixedY, targetCFrame.Position.Z)
+    local finalTarget = CFrame.new(targetPosition, targetPosition + targetCFrame.LookVector)
+
+    print("🚗 Sabit Y değerinde hareket başlıyor...")
+    smoothMove(startCF, finalTarget, false) -- Yatay hareket için normal hız
+    task.wait(0.2)
+
+    -- İkinci aşama: Hedef Y değerine direkt geçiş
+    smoothMove(vehicle.PrimaryPart.CFrame, finalTarget, true) -- Dikey hareket için yarı hız
+
+    for part, props in pairs(originalProps) do
+        if part and part.Parent then
+            part.Velocity = props.Velocity
+            part.RotVelocity = props.RotVelocity
+            part.AssemblyLinearVelocity = props.AssemblyLinearVelocity
+            part.AssemblyAngularVelocity = props.AssemblyAngularVelocity
+        end
+    end
+
+    vehicle:SetPrimaryPartCFrame(finalTarget)
+    driveSeat:Sit(humanoid)
+
+    print("✅ Araç hedefe başarıyla ulaştı.")
+end
+
+
+------------------------------------------------------------------------player tween
+------------------------------------------------------------------------player tween   örnek kullanım plrTween(CFrame.new(x, y, z))
+
+
+
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+_G.flightSpeed = 190 -- Default speed
+
+-----------------------------------------------
+-----------------------------------------------
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+
+local minSpeed = 170
+local maxSpeed = 240
+
+-- FPS ölçümü
+local fps = 60
+RunService.RenderStepped:Connect(function(deltaTime)
+	fps = math.floor(1 / deltaTime)
+end)
+
+-- Ping (RTT) ölçümü (ms cinsinden)
+local function getPing()
+	local dataPing = Stats:FindFirstChild("Network"):FindFirstChild("Ping")
+	if dataPing then
+		return dataPing:GetValue()
+	end
+	return 100 -- varsayılan ping
+end
+
+-- Uçuş hızını güncelle
+task.spawn(function()
+	while true do
+		local currentPing = getPing()
+		local pingFactor = math.clamp(1 - (currentPing / 300), 0, 1) -- yüksek ping = yavaşlat
+
+		local fpsFactor = math.clamp(fps / 60, 0.5, 1.2) -- düşük fps = yavaşlat
+
+		local adjustedSpeed = math.clamp(minSpeed * fpsFactor * pingFactor, minSpeed, maxSpeed)
+
+		_G.flightSpeed = math.floor(adjustedSpeed)
+
+		task.wait(1) -- her saniye bir kez kontrol et
+	end
+end)
+-----------------------------------------------
+-----------------------------------------------
+
+-- frameTween(CFrame.new(...)) şeklinde kullanım
+function frameTween(targetCFrame)
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+    if not vehiclesFolder then
+        warn("Vehicles klasörü bulunamadı.")
+        return
+    end
+
+    local vehicle = vehiclesFolder:FindFirstChild(player.Name)
+    if not vehicle then
+        warn("Oyuncuya ait araç bulunamadı.")
+        return
+    end
+
+    local driveSeat = vehicle:FindFirstChild("DriveSeat")
+    if not driveSeat or not driveSeat:IsA("Seat") then
+        warn("DriveSeat bulunamadı veya uygun değil.")
+        return
+    end
+
+    if not vehicle.PrimaryPart then
+        local body = vehicle:FindFirstChild("Body")
+        if body then
+            local mass = body:FindFirstChild("Mass")
+            if mass then
+                vehicle.PrimaryPart = mass
+            else
+                warn("Body içinde 'Mass' bulunamadı.")
+                return
+            end
+        else
+            warn("Araç içinde 'Body' bulunamadı.")
+            return
+        end
+    end
+
+    driveSeat:Sit(humanoid)
+    task.wait(0.1)
+
+    -- bringcar çağrısını kaldırıyoruz, çünkü dışarıdan çağrılacak
+    -- NOT: Eğer bringcar fonksiyonunu kullanmak istiyorsanız, frameTween çağırmadan önce
+    -- ayrıca bringcar() çağırın
+
+    local originalProps = {}
+    for _, part in pairs(vehicle:GetDescendants()) do
+        if part:IsA("BasePart") then
+            originalProps[part] = {
+                Velocity = part.Velocity,
+                RotVelocity = part.RotVelocity,
+                AssemblyLinearVelocity = part.AssemblyLinearVelocity,
+                AssemblyAngularVelocity = part.AssemblyAngularVelocity
+            }
+            part.Velocity = Vector3.zero
+            part.RotVelocity = Vector3.zero
+            part.AssemblyLinearVelocity = Vector3.zero
+            part.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+
+    local function createTween(startCF, endCF, isVertical)
+        local distance = (endCF.Position - startCF.Position).Magnitude
+        local speed = isVertical and (_G.flightSpeed / 2) or _G.flightSpeed -- Dikey hareket için hızı yarıya indir
+        local duration = distance / speed
+
+        local cframe = Instance.new("CFrameValue")
+        cframe.Value = startCF
+
+        cframe.Changed:Connect(function()
+            if vehicle.PrimaryPart then
+                vehicle:SetPrimaryPartCFrame(cframe.Value)
+
+                for _, part in pairs(vehicle:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Velocity = Vector3.zero
+                        part.RotVelocity = Vector3.zero
+                        part.AssemblyLinearVelocity = Vector3.zero
+                        part.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+            end
+        end)
+
+        local tween = TweenService:Create(cframe, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut), {
+            Value = endCF
+        })
+
+        return tween, cframe
+    end
+
+    local function smoothMove(startCF, endCF, isVertical)
+        local tween, cframe = createTween(startCF, endCF, isVertical)
+        tween:Play()
+        tween.Completed:Wait()
+        cframe:Destroy()
+
+        if humanoid.SeatPart ~= driveSeat then
+            driveSeat:Sit(humanoid)
+            task.wait(0.1)
+        end
+    end
+
+    -- Sabit Y değerinde hareket
+    local startCF = vehicle.PrimaryPart.CFrame
+    local fixedY = -1.80769644 -- Sabit Y değeri
+    local targetPosition = Vector3.new(targetCFrame.Position.X, fixedY, targetCFrame.Position.Z)
+    local finalTarget = CFrame.new(targetPosition, targetPosition + targetCFrame.LookVector)
+
+    print("🚗 Sabit Y değerinde hareket başlıyor...")
+    smoothMove(startCF, finalTarget, false) -- Yatay hareket için normal hız
+    task.wait(0.2)
+
+    -- İkinci aşama: Hedef Y değerine direkt geçiş
+    smoothMove(vehicle.PrimaryPart.CFrame, finalTarget, true) -- Dikey hareket için yarı hız
+
+    for part, props in pairs(originalProps) do
+        if part and part.Parent then
+            part.Velocity = props.Velocity
+            part.RotVelocity = props.RotVelocity
+            part.AssemblyLinearVelocity = props.AssemblyLinearVelocity
+            part.AssemblyAngularVelocity = props.AssemblyAngularVelocity
+        end
+    end
+
+    vehicle:SetPrimaryPartCFrame(finalTarget)
+    driveSeat:Sit(humanoid)
+
+    print("✅ Araç hedefe başarıyla ulaştı.")
+end
+
+
+------------------------------------------------------------------------player tween
+------------------------------------------------------------------------player tween   örnek kullanım plrTween(CFrame.new(x, y, z))
+
+
+
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+_G.flightSpeed = 190 -- Default speed
+
+-----------------------------------------------
+-----------------------------------------------
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+
+local minSpeed = 170
+local maxSpeed = 240
+
+-- FPS ölçümü
+local fps = 60
+RunService.RenderStepped:Connect(function(deltaTime)
+	fps = math.floor(1 / deltaTime)
+end)
+
+-- Ping (RTT) ölçümü (ms cinsinden)
+local function getPing()
+	local dataPing = Stats:FindFirstChild("Network"):FindFirstChild("Ping")
+	if dataPing then
+		return dataPing:GetValue()
+	end
+	return 100 -- varsayılan ping
+end
+
+-- Uçuş hızını güncelle
+task.spawn(function()
+	while true do
+		local currentPing = getPing()
+		local pingFactor = math.clamp(1 - (currentPing / 300), 0, 1) -- yüksek ping = yavaşlat
+
+		local fpsFactor = math.clamp(fps / 60, 0.5, 1.2) -- düşük fps = yavaşlat
+
+		local adjustedSpeed = math.clamp(minSpeed * fpsFactor * pingFactor, minSpeed, maxSpeed)
+
+		_G.flightSpeed = math.floor(adjustedSpeed)
+
+		task.wait(1) -- her saniye bir kez kontrol et
+	end
+end)
+-----------------------------------------------
+-----------------------------------------------
+
+-- frameTween(CFrame.new(...)) şeklinde kullanım
+function frameTween(targetCFrame)
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+    if not vehiclesFolder then
+        warn("Vehicles klasörü bulunamadı.")
+        return
+    end
+
+    local vehicle = vehiclesFolder:FindFirstChild(player.Name)
+    if not vehicle then
+        warn("Oyuncuya ait araç bulunamadı.")
+        return
+    end
+
+    local driveSeat = vehicle:FindFirstChild("DriveSeat")
+    if not driveSeat or not driveSeat:IsA("Seat") then
+        warn("DriveSeat bulunamadı veya uygun değil.")
+        return
+    end
+
+    if not vehicle.PrimaryPart then
+        local body = vehicle:FindFirstChild("Body")
+        if body then
+            local mass = body:FindFirstChild("Mass")
+            if mass then
+                vehicle.PrimaryPart = mass
+            else
+                warn("Body içinde 'Mass' bulunamadı.")
+                return
+            end
+        else
+            warn("Araç içinde 'Body' bulunamadı.")
+            return
+        end
+    end
+
+    driveSeat:Sit(humanoid)
+    task.wait(0.1)
+
+    -- bringcar çağrısını kaldırıyoruz, çünkü dışarıdan çağrılacak
+    -- NOT: Eğer bringcar fonksiyonunu kullanmak istiyorsanız, frameTween çağırmadan önce
+    -- ayrıca bringcar() çağırın
+
+    local originalProps = {}
+    for _, part in pairs(vehicle:GetDescendants()) do
+        if part:IsA("BasePart") then
+            originalProps[part] = {
+                Velocity = part.Velocity,
+                RotVelocity = part.RotVelocity,
+                AssemblyLinearVelocity = part.AssemblyLinearVelocity,
+                AssemblyAngularVelocity = part.AssemblyAngularVelocity
+            }
+            part.Velocity = Vector3.zero
+            part.RotVelocity = Vector3.zero
+            part.AssemblyLinearVelocity = Vector3.zero
+            part.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+
+    local function createTween(startCF, endCF, isVertical)
+        local distance = (endCF.Position - startCF.Position).Magnitude
+        local speed = isVertical and (_G.flightSpeed / 2) or _G.flightSpeed -- Dikey hareket için hızı yarıya indir
+        local duration = distance / speed
+
+        local cframe = Instance.new("CFrameValue")
+        cframe.Value = startCF
+
+        cframe.Changed:Connect(function()
+            if vehicle.PrimaryPart then
+                vehicle:SetPrimaryPartCFrame(cframe.Value)
+
+                for _, part in pairs(vehicle:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Velocity = Vector3.zero
+                        part.RotVelocity = Vector3.zero
+                        part.AssemblyLinearVelocity = Vector3.zero
+                        part.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+            end
+        end)
+
+        local tween = TweenService:Create(cframe, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut), {
+            Value = endCF
+        })
+
+        return tween, cframe
+    end
+
+    local function smoothMove(startCF, endCF, isVertical)
+        local tween, cframe = createTween(startCF, endCF, isVertical)
+        tween:Play()
+        tween.Completed:Wait()
+        cframe:Destroy()
+
+        if humanoid.SeatPart ~= driveSeat then
+            driveSeat:Sit(humanoid)
+            task.wait(0.1)
+        end
+    end
+
+    -- Sabit Y değerinde hareket
+    local startCF = vehicle.PrimaryPart.CFrame
+    local fixedY = -1.80769644 -- Sabit Y değeri
+    local targetPosition = Vector3.new(targetCFrame.Position.X, fixedY, targetCFrame.Position.Z)
+    local finalTarget = CFrame.new(targetPosition, targetPosition + targetCFrame.LookVector)
+
+    print("🚗 Sabit Y değerinde hareket başlıyor...")
+    smoothMove(startCF, finalTarget, false) -- Yatay hareket için normal hız
+    task.wait(0.2)
+
+    -- İkinci aşama: Hedef Y değerine direkt geçiş
+    smoothMove(vehicle.PrimaryPart.CFrame, finalTarget, true) -- Dikey hareket için yarı hız
+
+    for part, props in pairs(originalProps) do
+        if part and part.Parent then
+            part.Velocity = props.Velocity
+            part.RotVelocity = props.RotVelocity
+            part.AssemblyLinearVelocity = props.AssemblyLinearVelocity
+            part.AssemblyAngularVelocity = props.AssemblyAngularVelocity
+        end
+    end
+
+    vehicle:SetPrimaryPartCFrame(finalTarget)
+    driveSeat:Sit(humanoid)
+
+    print("✅ Araç hedefe başarıyla ulaştı.")
+end
+
+
+------------------------------------------------------------------------player tween
+------------------------------------------------------------------------player tween   örnek kullanım plrTween(CFrame.new(x, y, z))
+
+
+
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+_G.flightSpeed = 190 -- Default speed
+
+-----------------------------------------------
+-----------------------------------------------
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+
+local minSpeed = 170
+local maxSpeed = 240
+
+-- FPS ölçümü
+local fps = 60
+RunService.RenderStepped:Connect(function(deltaTime)
+	fps = math.floor(1 / deltaTime)
+end)
+
+-- Ping (RTT) ölçümü (ms cinsinden)
+local function getPing()
+	local dataPing = Stats:FindFirstChild("Network"):FindFirstChild("Ping")
+	if dataPing then
+		return dataPing:GetValue()
+	end
+	return 100 -- varsayılan ping
+end
+
+-- Uçuş hızını güncelle
+task.spawn(function()
+	while true do
+		local currentPing = getPing()
+		local pingFactor = math.clamp(1 - (currentPing / 300), 0, 1) -- yüksek ping = yavaşlat
+
+		local fpsFactor = math.clamp(fps / 60, 0.5, 1.2) -- düşük fps = yavaşlat
+
+		local adjustedSpeed = math.clamp(minSpeed * fpsFactor * pingFactor, minSpeed, maxSpeed)
+
+		_G.flightSpeed = math.floor(adjustedSpeed)
+
+		task.wait(1) -- her saniye bir kez kontrol et
+	end
+end)
+-----------------------------------------------
+-----------------------------------------------
+
+-- frameTween(CFrame.new(...)) şeklinde kullanım
+function frameTween(targetCFrame)
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+    if not vehiclesFolder then
+        warn("Vehicles klasörü bulunamadı.")
+        return
+    end
+
+    local vehicle = vehiclesFolder:FindFirstChild(player.Name)
+    if not vehicle then
+        warn("Oyuncuya ait araç bulunamadı.")
+        return
+    end
+
+    local driveSeat = vehicle:FindFirstChild("DriveSeat")
+    if not driveSeat or not driveSeat:IsA("Seat") then
+        warn("DriveSeat bulunamadı veya uygun değil.")
+        return
+    end
+
+    if not vehicle.PrimaryPart then
+        local body = vehicle:FindFirstChild("Body")
+        if body then
+            local mass = body:FindFirstChild("Mass")
+            if mass then
+                vehicle.PrimaryPart = mass
+            else
+                warn("Body içinde 'Mass' bulunamadı.")
+                return
+            end
+        else
+            warn("Araç içinde 'Body' bulunamadı.")
+            return
+        end
+    end
+
+    driveSeat:Sit(humanoid)
+    task.wait(0.1)
+
+    -- bringcar çağrısını kaldırıyoruz, çünkü dışarıdan çağrılacak
+    -- NOT: Eğer bringcar fonksiyonunu kullanmak istiyorsanız, frameTween çağırmadan önce
+    -- ayrıca bringcar() çağırın
+
+    local originalProps = {}
+    for _, part in pairs(vehicle:GetDescendants()) do
+        if part:IsA("BasePart") then
+            originalProps[part] = {
+                Velocity = part.Velocity,
+                RotVelocity = part.RotVelocity,
+                AssemblyLinearVelocity = part.AssemblyLinearVelocity,
+                AssemblyAngularVelocity = part.AssemblyAngularVelocity
+            }
+            part.Velocity = Vector3.zero
+            part.RotVelocity = Vector3.zero
+            part.AssemblyLinearVelocity = Vector3.zero
+            part.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+
+    local function createTween(startCF, endCF, isVertical)
+        local distance = (endCF.Position - startCF.Position).Magnitude
+        local speed = isVertical and (_G.flightSpeed / 2) or _G.flightSpeed -- Dikey hareket için hızı yarıya indir
+        local duration = distance / speed
+
+        local cframe = Instance.new("CFrameValue")
+        cframe.Value = startCF
+
+        cframe.Changed:Connect(function()
+            if vehicle.PrimaryPart then
+                vehicle:SetPrimaryPartCFrame(cframe.Value)
+
+                for _, part in pairs(vehicle:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Velocity = Vector3.zero
+                        part.RotVelocity = Vector3.zero
+                        part.AssemblyLinearVelocity = Vector3.zero
+                        part.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+            end
+        end)
+
+        local tween = TweenService:Create(cframe, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut), {
+            Value = endCF
+        })
+
+        return tween, cframe
+    end
+
+    local function smoothMove(startCF, endCF, isVertical)
+        local tween, cframe = createTween(startCF, endCF, isVertical)
+        tween:Play()
+        tween.Completed:Wait()
+        cframe:Destroy()
+
+        if humanoid.SeatPart ~= driveSeat then
+            driveSeat:Sit(humanoid)
+            task.wait(0.1)
+        end
+    end
+
+    -- Sabit Y değerinde hareket
+    local startCF = vehicle.PrimaryPart.CFrame
+    local fixedY = -1.80769644 -- Sabit Y değeri
+    local targetPosition = Vector3.new(targetCFrame.Position.X, fixedY, targetCFrame.Position.Z)
+    local finalTarget = CFrame.new(targetPosition, targetPosition + targetCFrame.LookVector)
+
+    print("🚗 Sabit Y değerinde hareket başlıyor...")
+    smoothMove(startCF, finalTarget, false) -- Yatay hareket için normal hız
+    task.wait(0.2)
+
+    -- İkinci aşama: Hedef Y değerine direkt geçiş
+    smoothMove(vehicle.PrimaryPart.CFrame, finalTarget, true) -- Dikey hareket için yarı hız
+
+    for part, props in pairs(originalProps) do
+        if part and part.Parent then
+            part.Velocity = props.Velocity
+            part.RotVelocity = props.RotVelocity
+            part.AssemblyLinearVelocity = props.AssemblyLinearVelocity
+            part.AssemblyAngularVelocity = props.AssemblyAngularVelocity
+        end
+    end
+
+    vehicle:SetPrimaryPartCFrame(finalTarget)
+    driveSeat:Sit(humanoid)
+
+    print("✅ Araç hedefe başarıyla ulaştı.")
+end
+
+
+------------------------------------------------------------------------player tween
+------------------------------------------------------------------------player tween   örnek kullanım plrTween(CFrame.new(x, y, z))
+
+
+
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+_G.flightSpeed = 190 -- Default speed
+
+-----------------------------------------------
+-----------------------------------------------
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+
+local minSpeed = 170
+local maxSpeed = 240
+
+-- FPS ölçümü
+local fps = 60
+RunService.RenderStepped:Connect(function(deltaTime)
+	fps = math.floor(1 / deltaTime)
+end)
+
+-- Ping (RTT) ölçümü (ms cinsinden)
+local function getPing()
+	local dataPing = Stats:FindFirstChild("Network"):FindFirstChild("Ping")
+	if dataPing then
+		return dataPing:GetValue()
+	end
+	return 100 -- varsayılan ping
+end
+
+-- Uçuş hızını güncelle
+task.spawn(function()
+	while true do
+		local currentPing = getPing()
+		local pingFactor = math.clamp(1 - (currentPing / 300), 0, 1) -- yüksek ping = yavaşlat
+
+		local fpsFactor = math.clamp(fps / 60, 0.5, 1.2) -- düşük fps = yavaşlat
+
+		local adjustedSpeed = math.clamp(minSpeed * fpsFactor * pingFactor, minSpeed, maxSpeed)
+
+		_G.flightSpeed = math.floor(adjustedSpeed)
+
+		task.wait(1) -- her saniye bir kez kontrol et
+	end
+end)
+-----------------------------------------------
+-----------------------------------------------
+
+-- frameTween(CFrame.new(...)) şeklinde kullanım
+function frameTween(targetCFrame)
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+    if not vehiclesFolder then
+        warn("Vehicles klasörü bulunamadı.")
+        return
+    end
+
+    local vehicle = vehiclesFolder:FindFirstChild(player.Name)
+    if not vehicle then
+        warn("Oyuncuya ait araç bulunamadı.")
+        return
+    end
+
+    local driveSeat = vehicle:FindFirstChild("DriveSeat")
+    if not driveSeat or not driveSeat:IsA("Seat") then
+        warn("DriveSeat bulunamadı veya uygun değil.")
+        return
+    end
+
+    if not vehicle.PrimaryPart then
+        local body = vehicle:FindFirstChild("Body")
+        if body then
+            local mass = body:FindFirstChild("Mass")
+            if mass then
+                vehicle.PrimaryPart = mass
+            else
+                warn("Body içinde 'Mass' bulunamadı.")
+                return
+            end
+        else
+            warn("Araç içinde 'Body' bulunamadı.")
+            return
+        end
+    end
+
+    driveSeat:Sit(humanoid)
+    task.wait(0.1)
+
+    -- bringcar çağrısını kaldırıyoruz, çünkü dışarıdan çağrılacak
+    -- NOT: Eğer bringcar fonksiyonunu kullanmak istiyorsanız, frameTween çağırmadan önce
+    -- ayrıca bringcar() çağırın
+
+    local originalProps = {}
+    for _, part in pairs(vehicle:GetDescendants()) do
+        if part:IsA("BasePart") then
+            originalProps[part] = {
+                Velocity = part.Velocity,
+                RotVelocity = part.RotVelocity,
+                AssemblyLinearVelocity = part.AssemblyLinearVelocity,
+                AssemblyAngularVelocity = part.AssemblyAngularVelocity
+            }
+            part.Velocity = Vector3.zero
+            part.RotVelocity = Vector3.zero
+            part.AssemblyLinearVelocity = Vector3.zero
+            part.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+
+    local function createTween(startCF, endCF, isVertical)
+        local distance = (endCF.Position - startCF.Position).Magnitude
+        local speed = isVertical and (_G.flightSpeed / 2) or _G.flightSpeed -- Dikey hareket için hızı yarıya indir
+        local duration = distance / speed
+
+        local cframe = Instance.new("CFrameValue")
+        cframe.Value = startCF
+
+        cframe.Changed:Connect(function()
+            if vehicle.PrimaryPart then
+                vehicle:SetPrimaryPartCFrame(cframe.Value)
+
+                for _, part in pairs(vehicle:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Velocity = Vector3.zero
+                        part.RotVelocity = Vector3.zero
+                        part.AssemblyLinearVelocity = Vector3.zero
+                        part.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+            end
+        end)
+
+        local tween = TweenService:Create(cframe, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut), {
+            Value = endCF
+        })
+
+        return tween, cframe
+    end
+
+    local function smoothMove(startCF, endCF, isVertical)
+        local tween, cframe = createTween(startCF, endCF, isVertical)
+        tween:Play()
+        tween.Completed:Wait()
+        cframe:Destroy()
+
+        if humanoid.SeatPart ~= driveSeat then
+            driveSeat:Sit(humanoid)
+            task.wait(0.1)
+        end
+    end
+
+    -- Sabit Y değerinde hareket
+    local startCF = vehicle.PrimaryPart.CFrame
+    local fixedY = -1.80769644 -- Sabit Y değeri
+    local targetPosition = Vector3.new(targetCFrame.Position.X, fixedY, targetCFrame.Position.Z)
+    local finalTarget = CFrame.new(targetPosition, targetPosition + targetCFrame.LookVector)
+
+    print("🚗 Sabit Y değerinde hareket başlıyor...")
+    smoothMove(startCF, finalTarget, false) -- Yatay hareket için normal hız
+    task.wait(0.2)
+
+    -- İkinci aşama: Hedef Y değerine direkt geçiş
+    smoothMove(vehicle.PrimaryPart.CFrame, finalTarget, true) -- Dikey hareket için yarı hız
+
+    for part, props in pairs(originalProps) do
+        if part and part.Parent then
+            part.Velocity = props.Velocity
+            part.RotVelocity = props.RotVelocity
+            part.AssemblyLinearVelocity = props.AssemblyLinearVelocity
+            part.AssemblyAngularVelocity = props.AssemblyAngularVelocity
+        end
+    end
+
+    vehicle:SetPrimaryPartCFrame(finalTarget)
+    driveSeat:Sit(humanoid)
+
+    print("✅ Araç hedefe başarıyla ulaştı.")
+end
+
+
+------------------------------------------------------------------------player tween
+------------------------------------------------------------------------player tween   örnek kullanım plrTween(CFrame.new(x, y, z))
+
+
+
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+_G.flightSpeed = 190 -- Default speed
+
+-----------------------------------------------
+-----------------------------------------------
+local RunService = game:GetService("RunService")
+local Stats = game:GetService("Stats")
+
+local minSpeed = 170
+local maxSpeed = 240
+
+-- FPS ölçümü
+local fps = 60
+RunService.RenderStepped:Connect(function(deltaTime)
+	fps = math.floor(1 / deltaTime)
+end)
+
+-- Ping (RTT) ölçümü (ms cinsinden)
+local function getPing()
+	local dataPing = Stats:FindFirstChild("Network"):FindFirstChild("Ping")
+	if dataPing then
+		return dataPing:GetValue()
+	end
+	return 100 -- varsayılan ping
+end
+
+-- Uçuş hızını güncelle
+task.spawn(function()
+	while true do
+		local currentPing = getPing()
+		local pingFactor = math.clamp(1 - (currentPing / 300), 0, 1) -- yüksek ping = yavaşlat
+
+		local fpsFactor = math.clamp(fps / 60, 0.5, 1.2) -- düşük fps = yavaşlat
+
+		local adjustedSpeed = math.clamp(minSpeed * fpsFactor * pingFactor, minSpeed, maxSpeed)
+
+		_G.flightSpeed = math.floor(adjustedSpeed)
+
+		task.wait(1) -- her saniye bir kez kontrol et
+	end
+end)
+-----------------------------------------------
+-----------------------------------------------
+
+-- frameTween(CFrame.new(...)) şeklinde kullanım
+function frameTween(targetCFrame)
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+    if not vehiclesFolder then
+        warn("Vehicles klasörü bulunamadı.")
+        return
+    end
+
+    local vehicle = vehiclesFolder:FindFirstChild(player.Name)
+    if not vehicle then
+        warn("Oyuncuya ait araç bulunamadı.")
+        return
+    end
+
+    local driveSeat = vehicle:FindFirstChild("DriveSeat")
+    if not driveSeat or not driveSeat:IsA("Seat") then
+        warn("DriveSeat bulunamadı veya uygun değil.")
+        return
+    end
+
+    if not vehicle.PrimaryPart then
+        local body = vehicle:FindFirstChild("Body")
+        if body then
+            local mass = body:FindFirstChild("Mass")
+            if mass then
+                vehicle.PrimaryPart = mass
+            else
+                warn("Body içinde 'Mass' bulunamadı.")
+                return
+            end
+        else
+            warn("Araç içinde 'Body' bulunamadı.")
+            return
+        end
+    end
+
+    driveSeat:Sit(humanoid)
+    task.wait(0.1)
+
+    -- bringcar çağrısını kaldırıyoruz, çünkü dışarıdan çağrılacak
+    -- NOT: Eğer bringcar fonksiyonunu kullanmak istiyorsanız, frameTween çağırmadan önce
+    -- ayrıca bringcar() çağırın
+
+    local originalProps = {}
+    for _, part in pairs(vehicle:GetDescendants()) do
+        if part:IsA("BasePart") then
+            originalProps[part] = {
+                Velocity = part.Velocity,
+                RotVelocity = part.RotVelocity,
+                AssemblyLinearVelocity = part.AssemblyLinearVelocity,
+                AssemblyAngularVelocity = part.AssemblyAngularVelocity
+            }
+            part.Velocity = Vector3.zero
+            part.RotVelocity = Vector3.zero
+            part.AssemblyLinearVelocity = Vector3.zero
+            part.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+
+    local function createTween(startCF, endCF, isVertical)
+        local distance = (endCF.Position - startCF.Position).Magnitude
+        local speed = isVertical and (_G.flightSpeed / 2) or _G.flightSpeed -- Dikey hareket için hızı yarıya indir
+        local duration = distance / speed
+
+        local cframe = Instance.new("CFrameValue")
+        cframe.Value = startCF
+
+        cframe.Changed:Connect(function()
+            if vehicle.PrimaryPart then
+                vehicle:SetPrimaryPartCFrame(cframe.Value)
+
+                for _, part in pairs(vehicle:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.Velocity = Vector3.zero
+                        part.RotVelocity = Vector3.zero
+                        part.AssemblyLinearVelocity = Vector3.zero
+                        part.AssemblyAngularVelocity = Vector3.zero
+                    end
+                end
+            end
+        end)
+
+        local tween = TweenService:Create(cframe, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut), {
+            Value = endCF
+        })
+
+        return tween, cframe
+    end
+
+    local function smoothMove(startCF, endCF, isVertical)
+        local tween, cframe = createTween(startCF, endCF, isVertical)
+        tween:Play()
+        tween.Completed:Wait()
+        cframe:Destroy()
+
+        if humanoid.SeatPart ~= driveSeat then
+            driveSeat:Sit(humanoid)
+            task.wait(0.1)
+        end
+    end
+
+    -- Sabit Y değerinde hareket
+    local startCF = vehicle.PrimaryPart.CFrame
+    local fixedY = -1.80769644 -- Sabit Y değeri
+    local targetPosition = Vector3.new(targetCFrame.Position.X, fixedY, targetCFrame.Position.Z)
+    local finalTarget = CFrame.new(targetPosition, targetPosition + targetCFrame.LookVector)
+
+    print("🚗 Sabit Y değerinde hareket başlıyor...")
+    smoothMove(startCF, finalTarget, false) -- Yatay hareket için normal hız
+    task.wait(0.2)
+
+    -- İkinci aşama: Hedef Y değerine direkt geçiş
+    smoothMove(vehicle.PrimaryPart.CFrame, finalTarget, true) -- Dikey hareket için yarı hız
+
+    for part, props in pairs(originalProps) do
+        if part and part.Parent then
+            part.Velocity = props.Velocity
+            part.RotVelocity = props.RotVelocity
+            part.AssemblyLinearVelocity = props.AssemblyLinearVelocity
+            part.AssemblyAngularVelocity = props.AssemblyAngularVelocity
+        end
+    end
+
+    vehicle:SetPrimaryPartCFrame(finalTarget)
+    driveSeat:Sit(humanoid)
+
+    print("✅ Araç hedefe başarıyla ulaştı.")
+end
+
+
+
+
+--------------------------------------------------------------------------
+-------------------------------------------------------------------------- örnek kullanım local targetCFrame = CFrame.new(10, 5, 20)  -- Örneğin, hedef CFrame    frameTween(targetCFrame)
+
+
+-- Araç çağırma fonksiyonu (global ve güvenli)
+function bringcar()
+    local player = game:GetService("Players").LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+    if not character or not character:FindFirstChild("HumanoidRootPart") then
+        warn("Karakter veya HumanoidRootPart bulunamadı.")
+        return false
+    end
+
+    local car = workspace:FindFirstChild("Vehicles") and workspace.Vehicles:FindFirstChild(player.Name)
+    if not car then
+        warn("Araç bulunamadı.")
+        return false
+    end
+
+    local driveSeat = car:FindFirstChild("DriveSeat", true)
+    if not driveSeat then
+        warn("DriveSeat bulunamadı.")
+        return false
+    end
+
+    car.PrimaryPart = driveSeat
+    local targetPosition = character.HumanoidRootPart.Position + character.HumanoidRootPart.CFrame.LookVector * 10
+    local lookAtPosition = character.HumanoidRootPart.Position
+
+    car:SetPrimaryPartCFrame(CFrame.new(targetPosition, lookAtPosition))
+    task.wait(0.5)
+
+    driveSeat:Sit(character:FindFirstChildOfClass("Humanoid"))
+    local waitTime = 0
+    while character:FindFirstChildOfClass("Humanoid").SeatPart ~= driveSeat and waitTime < 5 do
+        task.wait(0.1)
+        waitTime = waitTime + 0.1
+    end
+
+    if character:FindFirstChildOfClass("Humanoid").SeatPart ~= driveSeat then
+        warn("Karakter araca bindirilemedi.")
+        return false
+    end
+
+    print("Araç başarıyla getirildi ve karakter bindirildi.")
+    return true
+end
+
+
+------------------------------------------------
+------------------------------------------------
+
+
+function ClubRob()
+    -- Reset health tracking for this robbery
+    updateHealthTracking()
+    
+    -- Sağlık kontrolü yap, 25'in altındaysa reset
+    if checkHealthAndReset() then
+        -- Header fonksiyonunu tekrar başlat
+        header()
+        return
+    end
+    
+    -- Başlangıç pozisyonuna tween
+    local clubtopframe = CFrame.new(-1756.32764, 3.34990072, 3012.82764, 0.0072402712, 0.000172982691, -0.999973774, 0.00223436486, 0.999997497, 0.000189164624, 0.999971271, -0.0022356757, 0.00723986654)
+    frameTween(clubtopframe)
+    task.wait(0.4)
+    
+    -- Police check
+    if detectPolice("Club") then return end
+
+    -- Otur
+    game.Players.LocalPlayer.Character:WaitForChild("Humanoid").Sit = true
+    task.wait(0.3)
+
+    -- Bomba koyma pozisyonuna tween
+    local clubdownbomframe = CFrame.new(-1743.86169, 11.125, 3012.58472, 0.999932408, 2.92081737e-08, 0.0116271209, -3.02844754e-08, 1, 9.23923267e-08, -0.0116271209, -9.27382047e-08, 0.999932408)
+    plrTween(clubdownbomframe)
+    task.wait(0.3)
+    
+    -- Police check
+    if detectPolice("Club") then return end
+
+    -- Bomba ekipmanı hazırla
+    bombequip()
+    task.wait(0.4)
+    
+    -- Police check
+    if detectPolice("Club") then return end
+
+    -- Bomba yerleştir
+    if not placebomb() then
+        warn("Bomba yerleştirilemedi! İşlem iptal ediliyor.")
+        return
+    end
+    task.wait(0.7)
+    
+    -- Police check
+    if detectPolice("Club") then return end
+
+    -- Patlatma pozisyonuna tween
+    plrTween(CFrame.new(-1744.17468, 11, 3043.31348, 0.999123216, -6.63560185e-09, 0.0418666899, 9.07292375e-09, 1, -5.80262416e-08, -0.0418666899, 5.83552193e-08, 0.999123216))
+    task.wait(1)
+    
+    -- Police check
+    if detectPolice("Club") then return end
+
+    -- Bombayı patlat
+    firebomb()
+    task.wait(2.8)
+    
+    -- Police check
+    if detectPolice("Club") then return end
+
+    -- Tekrar bomba koyma pozisyonuna tween
+    plrTween(clubdownbomframe)
+    task.wait(0.3)
+    
+    -- Police check
+    if detectPolice("Club") then return end
+
+    -- Karakteri sabitle
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if root then
+        root.Anchored = true
+    end
+
+    task.wait(0.1)
+
+    -- Kamera zoom ayarı kaydet ve sınırla
+    local oldMaxZoom = LocalPlayer.CameraMaxZoomDistance
+    LocalPlayer.CameraMaxZoomDistance = RobberyZoomValue
+
+    -- Eşyaları toplayan fonksiyon
+    local function collectItems(folder)
+        local character = LocalPlayer.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+
+        local items = {}
+        for _, item in pairs(folder:GetChildren()) do
+            if item:IsA("MeshPart") and item.Transparency == 0 then
+                table.insert(items, {
+                    item = item,
+                    distance = (item.Position - rootPart.Position).Magnitude
+                })
+        end
+    end
+
+        table.sort(items, function(a, b)
+            return a.distance < b.distance
+        end)
+
+        for _, data in ipairs(items) do
+            -- Police check before each item collection
+            if detectPolice("Club") then
+                -- Restore camera zoom
+                if oldMaxZoom > 0 then
+                    LocalPlayer.CameraMaxZoomDistance = oldMaxZoom
+                end
+                return true
+            end
+            
+            local item = data.item
+            if item and item.Transparency == 0 then
+                local itemPos = item.Position + Vector3.new(0, 3, 0)
+                plrTween(CFrame.new(itemPos))
+                task.wait(0.3)
+
+                local cam = workspace.CurrentCamera
+                cam.CFrame = CFrame.new(cam.CFrame.Position, item.Position)
+
+                -- E tuşuna bas
+                local vim = game:GetService("VirtualInputManager")
+                vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                task.wait(ProximityPromptTimeBet)
+                vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+
+                task.wait(0.2)
+                    end
+                end
+        return false
+    end
+
+    -- Toplama işlemleri
+    local itemsFolder = workspace:WaitForChild("Robberies"):WaitForChild("Club Robbery"):WaitForChild("Club"):WaitForChild("Items")
+    local moneyFolder = workspace:WaitForChild("Robberies"):WaitForChild("Club Robbery"):WaitForChild("Club"):WaitForChild("Money")
+
+    if not collectItems(itemsFolder) then
+        collectItems(moneyFolder)
+    end
+
+    -- Karakteri serbest bırak
+    if root then
+        root.Anchored = false
+    end
+
+    -- Kamera mesafesini eski haline getir
+    if oldMaxZoom > 0 then
+        LocalPlayer.CameraMaxZoomDistance = oldMaxZoom
+    end
+    
+    -- Set lock
+    clublock = true
+    clubLockTime = os.time()
+end
+
+
+
+
+------------------------------------------------
+------------------------------------------------
+
+function ContainergreRob()
+    -- Reset health tracking for this robbery
+    updateHealthTracking()
+    
+    -- Sağlık kontrolü yap, 25'in altındaysa reset
+    if checkHealthAndReset() then
+        -- Header fonksiyonunu tekrar başlat
+        header()
+        return
+    end
+    
+    task.wait(0.8)
+
+    -- Container üstüne git
+    local containergretopframe = CFrame.new(1053.07568, 7.23025846, 2163.43872, 0.999668419, -0.025648322, -0.00228540599, 0.0256768912, 0.999579191, 0.0134979449, 0.00193824456, -0.0135521516, 0.999906301)
+    frameTween(containergretopframe)
+    task.wait(0.7)
+    
+    -- Police check
+    if detectPolice("Containergre") then return end
+
+    -- Aşağı atla
+    game.Players.LocalPlayer.Character:WaitForChild("Humanoid").Sit = true
+    task.wait(0.5)
+
+    -- Container içine git
+    plrTween(CFrame.new(1090.70557, 28.6957436, 2150.08203, -0.0265184976, 9.24257932e-08, -0.999648333, 3.88999233e-09, 1, 9.23551156e-08, 0.999648333, -1.43950529e-09, -0.0265184976))
+	task.wait(0.2)
+    
+    -- Police check
+    if detectPolice("Containergre") then return end
+    
+    local containergredownframe = CFrame.new(1154.05103, 28.6957417, 2154.30737, -0.66597712, -4.31573923e-08, 0.745972157, -9.79093286e-08, 1, -2.95560341e-08, -0.745972157, -9.27212724e-08, -0.66597712)
+    plrTween(containergredownframe)
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Containergre") then return end
+
+    -- Bomba yerleştir
+    bombequip()
+    task.wait(0.4)
+    
+    -- Police check
+    if detectPolice("Containergre") then return end
+
+    if not placebomb() then
+        warn("Bomba yerleştirilemedi! İşlem iptal ediliyor.")
+        return
+    end
+
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Containergre") then return end
+
+    local firePosition = CFrame.new(1181.21899, 28.6957455, 2141.69629, -0.523143411, 1.68497234e-08, 0.852244675, 8.63283001e-10, 1, -1.92410745e-08, -0.852244675, -9.33011268e-09, -0.523143411)
+    plrTween(firePosition)
+    
+    -- Police check
+    if detectPolice("Containergre") then return end
+    
+    firebomb()
+
+    task.wait(3)
+    
+    -- Police check
+    if detectPolice("Containergre") then return end
+
+    -- Container modelini bul
+    local containerModel = nil
+    local targetColor = Color3.fromRGB(58, 125, 21)
+    
+    for attempt = 1, 10 do
+        for _, model in ipairs(workspace.Robberies.ContainerRobberies:GetChildren()) do
+            if model:IsA("Model") and model.Name == "ContainerRobbery" then
+                local basePart = model:FindFirstChild("Base")
+                if basePart and basePart:IsA("MeshPart") and basePart.Color == targetColor then
+                    containerModel = model
+                    break
+                end
+            end
+        end
+        if containerModel then break end
+        task.wait(0.5)
+        
+        -- Police check during container search
+        if detectPolice("Containergre") then return end
+    end
+
+    if not containerModel then
+        warn("❌ Doğru renkli ContainerRobbery modeli bulunamadı!")
+        return
+    end
+
+    -- Toplama fonksiyonu
+    local function collectFrom(folderName)
+        local folder = containerModel:FindFirstChild(folderName)
+        if not folder then
+            warn("❌ '" .. folderName .. "' klasörü bulunamadı!")
+            return false
+        end
+
+        local character = LocalPlayer.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then warn("❌ RootPart yok!") return false end
+
+        local itemsCollected = 0
+
+        for _, item in ipairs(folder:GetChildren()) do
+            -- Police check before each item collection
+            if detectPolice("Containergre") then return false end
+            
+            local partToCollect = nil
+            if item.Name == "MP5" or item.Name == "Glock 17" then
+                partToCollect = item:FindFirstChild("Main")
+            elseif item:IsA("Model") and item.Name == "Cookie" then
+                partToCollect = item:FindFirstChild("Handle")
+            elseif item:IsA("MeshPart") then
+                partToCollect = item
+            end
+
+            if partToCollect and partToCollect.Transparency == 0 then
+                local camera = workspace.CurrentCamera
+                local position = partToCollect.Position + Vector3.new(0, 3, 0)
+                plrTween(CFrame.new(position))
+                task.wait(0.3)
+                camera.CFrame = CFrame.new(camera.CFrame.Position, partToCollect.Position)
+                UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+                UserInputService.MouseIconEnabled = false
+
+                game:GetService("VirtualInputManager"):SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                task.wait(ProximityPromptTimeBet)
+                game:GetService("VirtualInputManager"):SendKeyEvent(false, Enum.KeyCode.E, false, game)
+
+                task.wait(0.2)
+                UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+                UserInputService.MouseIconEnabled = true
+
+                if not partToCollect.Parent or partToCollect.Transparency == 1 then
+                    itemsCollected += 1
+                else
+                    warn("⚠️ Öge toplanamadı: " .. item.Name)
+                    end
+                end
+            end
+
+        print("✅ " .. itemsCollected .. " adet " .. folderName .. " ögesi toplandı.")
+        return itemsCollected > 0
+    end
+
+    -- Items ve Money topla
+    if not collectFrom("Items") then
+        -- If interrupted by police, set lock and return
+        if detectPolice("Containergre") then return end
+    end
+    
+    if not collectFrom("Money") then
+        -- If interrupted by police, set lock and return
+        if detectPolice("Containergre") then return end
+    end
+
+    -- Container bölgesine geri dön
+    frameTween(contaregion)
+    
+    -- Set lock after successful robbery
+    containergrelock = true
+    containergreLockTime = os.time()
+    
+    -- Check if the yellow container is available
+    local containeryelAvailable = cconta()
+    if containeryelAvailable and not containeryellock then
+        -- If yellow container is available, rob it next
+        ContaineryelRob()
+        end
+    end
+
+
+-----------------------------------
+-----------------------------------
+-----------------------------------
+-----------------------------------
+
+function ContaineryelRob()
+    -- Reset health tracking for this robbery
+    updateHealthTracking()
+    
+    -- Sağlık kontrolü yap, 25'in altındaysa reset
+    if checkHealthAndReset() then
+        -- Header fonksiyonunu tekrar başlat
+        header()
+        return
+    end
+    
+    task.wait(0.8)
+
+    -- Container üstüne git
+    local containeryeltopframe = CFrame.new(1053.95435, 3.53563404, 2361.96265, -0.998305321, -0.028588498, -0.0506873876, -0.0278780833, 0.999503732, -0.0146677708, 0.0510815606, -0.013229846, -0.998606861)
+    frameTween(containeryeltopframe)
+    task.wait(0.7)
+    
+    -- Police check
+    if detectPolice("Containerye") then return end
+
+    -- Aşağı atla
+    game.Players.LocalPlayer.Character:WaitForChild("Humanoid").Sit = true
+    task.wait(0.5)
+
+    -- Container içine git
+    plrTween(CFrame.new(1122.20947, 27.1015759, 2325.69067, -0.00704959687, 0.0126929628, 0.999894679, -0.0224158019, 0.999666274, -0.0128481025, -0.999723971, -0.0225040112, -0.00676272111))
+    task.wait(0.2)
+
+    -- Police check
+    if detectPolice("Containerye") then return end
+    
+    local containeryeldownframe = CFrame.new(1130.47607, 28.695713, 2328.63501, 0.707485437, -7.22258804e-08, -0.706727922, 5.16592422e-08, 1, -5.048296e-08, 0.706727922, -7.93068278e-10, 0.707485437)
+    plrTween(containeryeldownframe)
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Containerye") then return end
+
+    -- Bomba işlemleri
+    bombequip()
+    task.wait(0.4)
+    
+    -- Police check
+    if detectPolice("Containerye") then return end
+
+    if not placebomb() then
+        warn("Bomba yerleştirilemedi! İşlem iptal ediliyor.")
+        return
+    end
+
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Containerye") then return end
+
+    local firePosition = CFrame.new(1106.5177, 28.6957092, 2345.65161, 0.585132182, -4.63025245e-08, -0.810937941, 3.54248875e-09, 1, -5.45414132e-08, 0.810937941, 2.90411961e-08, 0.585132182)
+    plrTween(firePosition)
+    
+    -- Police check
+    if detectPolice("Containerye") then return end
+    
+    firebomb()
+
+    task.wait(3)
+    
+    -- Police check
+    if detectPolice("Containerye") then return end
+
+    -- Container modelini bul
+    local containerModel = nil
+    local targetColor = Color3.fromRGB(182, 138, 42)
+    
+    for attempt = 1, 10 do
+        for _, model in ipairs(workspace.Robberies.ContainerRobberies:GetChildren()) do
+            if model:IsA("Model") and model.Name == "ContainerRobbery" then
+                local basePart = model:FindFirstChild("Base")
+                if basePart and basePart:IsA("MeshPart") and basePart.Color == targetColor then
+                    containerModel = model
+                    break
+                end
+            end
+        end
+        if containerModel then break end
+        task.wait(0.5)
+        
+        -- Police check during container search
+        if detectPolice("Containerye") then return end
+    end
+
+    if not containerModel then
+        warn("❌ Doğru renkli ContainerRobbery modeli bulunamadı!")
+        return
+    end
+
+    -- Kamera zoom sınırını ayarla
+    local oldMaxZoom = LocalPlayer.CameraMaxZoomDistance
+    LocalPlayer.CameraMaxZoomDistance = RobberyZoomValue
+
+    -- Toplama fonksiyonu
+    local function collectFrom(folderName)
+        local folder = containerModel:FindFirstChild(folderName)
+        if not folder then
+            warn("❌ '" .. folderName .. "' klasörü bulunamadı!")
+            return false
+        end
+
+        local character = LocalPlayer.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then warn("❌ RootPart yok!") return false end
+
+        local itemsCollected = 0
+        local maxCollectionAttempts = 3
+
+        for _, item in ipairs(folder:GetChildren()) do
+            -- Police check before each item collection
+            if detectPolice("Containerye") then
+                -- Restore camera zoom
+                if oldMaxZoom > 0 then
+                    LocalPlayer.CameraMaxZoomDistance = oldMaxZoom
+                end
+                return false
+            end
+            
+            if not item then continue end
+
+            local partToCollect = nil
+            if item.Name == "MP5" or item.Name == "Glock 17" then
+                partToCollect = item:FindFirstChild("Main")
+            elseif item:IsA("Model") and item.Name == "Cookie" then
+                partToCollect = item:FindFirstChild("Handle")
+            elseif item:IsA("MeshPart") then
+                partToCollect = item
+            end
+
+            if partToCollect and partToCollect.Transparency == 0 then
+                local collectionSuccess = false
+                local collectionAttempts = 0
+
+                while not collectionSuccess and collectionAttempts < maxCollectionAttempts do
+                    -- Police check during collection attempts
+                    if detectPolice("Containerye") then
+                        -- Restore camera zoom
+                        if oldMaxZoom > 0 then
+                            LocalPlayer.CameraMaxZoomDistance = oldMaxZoom
+                        end
+                        return false
+                    end
+                    
+                    local position = partToCollect.Position + Vector3.new(0, 3, 0)
+                    plrTween(CFrame.new(position))
+                    task.wait(0.3)
+
+                    local camera = workspace.CurrentCamera
+                    camera.CFrame = CFrame.new(camera.CFrame.Position, partToCollect.Position)
+
+                    UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+                    UserInputService.MouseIconEnabled = false
+
+                    task.wait(0.05)
+
+                    game:GetService("VirtualInputManager"):SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                    task.wait(ProximityPromptTimeBet)
+                    game:GetService("VirtualInputManager"):SendKeyEvent(false, Enum.KeyCode.E, false, game)
+
+                    task.wait(0.2)
+                    if not partToCollect.Parent or partToCollect.Transparency == 1 then
+                        collectionSuccess = true
+                        itemsCollected = itemsCollected + 1
+                    else
+                        collectionAttempts += 1
+                        game:GetService("VirtualInputManager"):SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                        task.wait(ProximityPromptTimeBet)
+                        game:GetService("VirtualInputManager"):SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                        task.wait(0.2)
+
+                        if not partToCollect.Parent or partToCollect.Transparency == 1 then
+                            collectionSuccess = true
+                            itemsCollected += 1
+        end
+    end
+
+                    UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+                    UserInputService.MouseIconEnabled = true
+                end
+
+                if not collectionSuccess then
+                    warn("⚠️ Öge toplanamadı: " .. item.Name)
+                end
+            end
+        end
+
+        print("✅ " .. itemsCollected .. " adet " .. folderName .. " ögesi toplandı.")
+        return itemsCollected > 0
+    end
+
+    -- Items ve Money topla
+    if not collectFrom("Items") then
+        -- If interrupted by police, restore camera zoom and return
+        if oldMaxZoom > 0 then
+            LocalPlayer.CameraMaxZoomDistance = oldMaxZoom
+        end
+        return
+    end
+
+    if not collectFrom("Money") then
+        -- If interrupted by police, restore camera zoom and return
+        if oldMaxZoom > 0 then
+            LocalPlayer.CameraMaxZoomDistance = oldMaxZoom
+        end
+            return
+        end
+
+    -- Restore camera zoom
+    if oldMaxZoom > 0 then
+        LocalPlayer.CameraMaxZoomDistance = oldMaxZoom
+    end
+
+    -- Container bölgesine geri dön
+    frameTween(contaregion)
+    
+    -- Set lock
+    containeryellock = true
+    containeryelLockTime = os.time()
+    
+    -- Check if the other container is available
+    local _, containergreAvailable = cconta()
+    if containergreAvailable and not containergrelock then
+        -- If green container is available, rob it next
+        ContainergreRob()
+        end
+    end
+
+
+
+-- Para toplama fonksiyonu (polis kontrolü olmadan)
+local function collectMoney(robberyType)
+    local drops = workspace:WaitForChild("Drops")
+    local playerName = player.Name
+    local moneys = {}
+    local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return false end
+
+    -- Oyuncuya ait tüm MeshPart paraları topla
+    for _, drop in pairs(drops:GetChildren()) do
+        if drop:IsA("MeshPart") and drop.Name == playerName then
+            table.insert(moneys, drop)
+                    end
+                end
+
+    -- Mesafeye göre sırala
+    table.sort(moneys, function(a, b)
+        local distA = (a.Position - rootPart.Position).Magnitude
+        local distB = (b.Position - rootPart.Position).Magnitude
+        return distA < distB
+    end)
+
+    -- Her para için sırasıyla işlemleri uygula
+    for _, money in ipairs(moneys) do
+        -- Police check before each money collection
+        if detectPolice(robberyType) then
+            -- Lock the robbery location
+            lockRobbery(robberyType)
+            return false
+        end
+        
+        -- Para hala var mı kontrol et
+        if not money.Parent or money.Transparency == 1 then
+            continue
+        end
+
+        -- 2 birim yukarıdan tween yap
+        local positionAbove = money.Position + Vector3.new(0, 3, 0)
+        plrTween(CFrame.new(positionAbove))
+        task.wait(0.3)
+
+        -- Remote Event ile para toplama - önce true gönder
+        local args = {
+            money,
+            MONEY_COLLECT_CODE,
+            true
+        }
+        
+        RemoteEvents.CollectMoney:FireServer(unpack(args))
+        
+        -- ProximityPromptTimeBet kadar bekle
+        task.wait(ProximityPromptTimeBet)
+        
+        -- Sonra false gönder
+        args[3] = false
+        RemoteEvents.CollectMoney:FireServer(unpack(args))
+        
+        -- Para toplanana kadar kısa bir bekleme
+    task.wait(0.2)
+
+        -- Para hala duruyor mu kontrol et
+        if money.Parent and money.Transparency == 0 then
+            -- Police check before retry
+            if detectPolice(robberyType) then
+                lockRobbery(robberyType)
+                return false
+            end
+            
+            -- Tekrar dene - önce true
+            args[3] = true
+            RemoteEvents.CollectMoney:FireServer(unpack(args))
+            
+            -- ProximityPromptTimeBet kadar bekle
+            task.wait(ProximityPromptTimeBet)
+            
+            -- Sonra false
+            args[3] = false
+            RemoteEvents.CollectMoney:FireServer(unpack(args))
+            
+            task.wait(0.2)
+        end
+    end
+
+    -- Son bir kez daha para var mı kontrol et
+    local remainingMoney = false
+    for _, drop in pairs(drops:GetChildren()) do
+        if drop:IsA("MeshPart") and drop.Name == playerName and drop.Transparency == 0 then
+            remainingMoney = true
+            break
+        end
+    end
+
+    if remainingMoney then
+        print("⚠️ Bazı paralar kalmış, tekrar toplanıyor...")
+        return collectMoney(robberyType) -- Recursive olarak tekrar dene
+    end
+
+    print("✅ Tüm paralar toplandı!")
+    return true
+end
+
+
+
+
+-- Soygun fonksiyonlarını güncelle
+function GasngoRob()
+    -- Reset health tracking for this robbery
+    updateHealthTracking()
+    
+    -- Sağlık kontrolü yap, 25'in altındaysa reset
+    if checkHealthAndReset() then
+        -- Header fonksiyonunu tekrar başlat
+        header()
+        return
+    end
+    
+    task.wait(0.8)
+  -- Gasngo üstüne git
+    local gasngotopframe = CFrame.new(-1487.17456, 7.25128698, 3748.30493, -0.495812625, -0.0415738374, 0.867433846, 0.0261790343, 0.997684002, 0.0627799481, -0.86803484, 0.0538356714, -0.49357596)
+    local tween = frameTween(gasngotopframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.7)
+    
+    -- Police check
+    if detectPolice("Gasngo") then return end
+
+    -- Aşağı atla
+    game.Players.LocalPlayer.Character:WaitForChild("Humanoid").Sit = true
+    task.wait(0.5)
+
+    -- Gasngo içine git
+    local gasngodownframe = CFrame.new(-1522.00403, 5.74999905, 3762.99707, -0.0313359685, 7.03007075e-08, 0.999508917, 2.57135344e-08, 1, -6.95290936e-08, -0.999508917, 2.35221442e-08, -0.0313359685)
+    tween = plrTween(gasngodownframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Gasngo") then return end
+
+    -- 6 kez F tuşuna bas
+    for i = 1, 6 do
+        -- Police check before each key press
+        if detectPolice("Gasngo") then return end
+        
+        game:GetService("VirtualInputManager"):SendKeyEvent(true, "F", false, game)
+        task.wait(1)
+    end
+    
+    -- Police check
+    if detectPolice("Gasngo") then return end
+
+    -- Modify collectMoney to check for police
+    local function safeCollectMoney()
+        local drops = workspace:WaitForChild("Drops")
+        local playerName = LocalPlayer.Name
+        local moneys = {}
+        local rootPart = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return false end
+
+        -- Oyuncuya ait tüm MeshPart paraları topla
+        for _, drop in pairs(drops:GetChildren()) do
+            if drop:IsA("MeshPart") and drop.Name == playerName then
+                table.insert(moneys, drop)
+                end
+            end
+
+        -- Mesafeye göre sırala
+        table.sort(moneys, function(a, b)
+            local distA = (a.Position - rootPart.Position).Magnitude
+            local distB = (b.Position - rootPart.Position).Magnitude
+            return distA < distB
+        end)
+
+        -- Her para için sırasıyla işlemleri uygula
+        for _, money in ipairs(moneys) do
+            -- Police check before each money collection
+            if detectPolice("Gasngo") then return false end
+            
+            -- Para hala var mı kontrol et
+            if not money.Parent or money.Transparency == 1 then
+                continue
+            end
+
+            -- 2 birim yukarıdan tween yap
+            local positionAbove = money.Position + Vector3.new(0, 3, 0)
+            plrTween(CFrame.new(positionAbove))
+            task.wait(0.3)
+
+            -- Remote Event ile para toplama - önce true gönder
+            local args = {
+                money,
+                MONEY_COLLECT_CODE,
+                true
+            }
+            
+            RemoteEvents.CollectMoney:FireServer(unpack(args))
+            
+            -- ProximityPromptTimeBet kadar bekle
+            task.wait(ProximityPromptTimeBet)
+            
+            -- Sonra false gönder
+            args[3] = false
+            RemoteEvents.CollectMoney:FireServer(unpack(args))
+            
+            -- Para toplanana kadar kısa bir bekleme
+    task.wait(0.2)
+
+            -- Para hala duruyor mu kontrol et
+            if money.Parent and money.Transparency == 0 then
+                -- Police check before retry
+                if detectPolice("Gasngo") then return false end
+                
+                -- Tekrar dene - önce true
+                args[3] = true
+                RemoteEvents.CollectMoney:FireServer(unpack(args))
+                
+                -- ProximityPromptTimeBet kadar bekle
+                task.wait(ProximityPromptTimeBet)
+                
+                -- Sonra false
+                args[3] = false
+                RemoteEvents.CollectMoney:FireServer(unpack(args))
+                
+                task.wait(0.2)
+        end
+    end
+
+        return true
+    end
+
+    -- Para toplama işlemi with police check
+    if not safeCollectMoney() then
+        -- If interrupted by police, set lock and return to safe zone
+        gasngolock = true
+        gasngoLockTime = os.time()
+                return
+            end
+    
+    -- Set lock after successful robbery
+    gasngolock = true
+    gasngoLockTime = os.time()
+end
+
+function AresRob()
+    -- Reset health tracking for this robbery
+    updateHealthTracking()
+    
+    -- Sağlık kontrolü yap, 25'in altındaysa reset
+    if checkHealthAndReset() then
+        -- Header fonksiyonunu tekrar başlat
+        header()
+        return
+    end
+
+    task.wait(0.8)
+   -- Ares üstüne git
+    local arestopframe = CFrame.new(-820.80896, 3.34961104, 1533.9646, 0.999215782, 0.00233023753, -0.0395277292, -0.0023302373, 0.999997377, 4.60725532e-05, 0.0395277292, 4.60725714e-05, 0.999218583)
+    local tween = frameTween(arestopframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.7)
+    
+    -- Police check
+    if detectPolice("Ares") then return end
+
+
+    -- Aşağı atla
+    game.Players.LocalPlayer.Character:WaitForChild("Humanoid").Sit = true
+    task.wait(0.5)
+
+    -- Ares içine git
+    local aresdownframe = CFrame.new(-838.88446, 5.04301119, 1532.31934, 0.0025932698, -9.98028113e-08, 0.999996662, 5.22094545e-08, 1, 9.96677585e-08, -0.999996662, 5.19508134e-08, 0.0025932698)
+    tween = plrTween(aresdownframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Ares") then return end
+
+    for i = 1, 6 do
+        -- Police check before each key press
+        if detectPolice("Ares") then return end
+        
+        game:GetService("VirtualInputManager"):SendKeyEvent(true, "F", false, game)
+        task.wait(1)
+    end
+    
+    -- Police check
+    if detectPolice("Ares") then return end
+
+    -- Para toplama işlemi
+    if not collectMoney("Ares") then
+        -- If interrupted by police detection in collectMoney
+        return
+    end
+    
+    -- Set lock after successful robbery
+    areslock = true
+    aresLockTime = os.time()
+end
+
+function OssoRob()
+    -- Reset health tracking for this robbery
+    updateHealthTracking()
+    
+    -- Sağlık kontrolü yap, 25'in altındaysa reset
+    if checkHealthAndReset() then
+        -- Header fonksiyonunu tekrar başlat
+        header()
+        return
+    end
+    fixedY = 2
+    
+    task.wait(0.8)
+
+    -- Osso üstüne git
+    local osotopframe = CFrame.new(-102.392258, 6.9863987, -771.406799, 0.0221278314, 0.0102846883, -0.999702275, 0.0258148275, 0.999607801, 0.0108551132, 0.999421835, -0.0260473415, 0.0218536556)
+    local tween = frameTween(osotopframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.7)
+    
+    -- Police check
+    if detectPolice("Osso") then return end
+
+    -- Aşağı atla
+    game.Players.LocalPlayer.Character:WaitForChild("Humanoid").Sit = true
+    task.wait(0.5)
+
+    -- Osso içine git
+    local ossodownframe = CFrame.new(-80.0744171, 5.23437977, -782.978699, -0.997873425, -1.41869565e-08, -0.0651813969, -1.72479595e-08, 1, 4.63985792e-08, 0.0651813969, 4.74241553e-08, -0.997873425)
+    tween = plrTween(ossodownframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Osso") then return end
+
+    -- 6 kez F tuşuna bas
+    for i = 1, 6 do
+        -- Police check before each key press
+        if detectPolice("Osso") then return end
+        
+        game:GetService("VirtualInputManager"):SendKeyEvent(true, "F", false, game)
+        task.wait(1)
+    end
+    
+    -- Police check
+    if detectPolice("Osso") then return end
+
+    -- Para toplama işlemi
+    if not collectMoney("Osso") then
+        -- If interrupted by police detection in collectMoney
+        return
+    end
+
+    -- Set lock after successful robbery
+    ossolock = true
+    ossoLockTime = os.time()
+end
+
+function ClothingRob()
+    -- Reset health tracking for this robbery
+    updateHealthTracking()
+    
+    -- Sağlık kontrolü yap, 25'in altındaysa reset
+    if checkHealthAndReset() then
+        -- Header fonksiyonunu tekrar başlat
+        header()
+        return
+    end
+    fixedY = 2
+    
+    task.wait(0.8)
+
+    -- Clothing üstüne git
+    local clothingtopframe = CFrame.new(473.070282, 6.9927249, -1382.59265, 0.999466658, -0.0283777863, 0.0161597673, 0.0281205643, 0.999477625, 0.015928179, -0.016603332, -0.0154652623, 0.999742568)
+    local tween = frameTween(clothingtopframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.7)
+    
+    -- Police check
+    if detectPolice("Clothing") then return end
+
+    -- Aşağı atla
+    game.Players.LocalPlayer.Character:WaitForChild("Humanoid").Sit = true
+    task.wait(0.5)
+
+    -- Clothing içine git
+    local clothingdownframe = CFrame.new(469.563385, 5.25157642, -1406.52063, 0.0608269088, -7.10946537e-08, -0.998148322, 7.95685651e-09, 1, -7.0741649e-08, 0.998148322, -3.63912744e-09, 0.0608269088)
+    tween = plrTween(clothingdownframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Clothing") then return end
+
+    -- 6 kez F tuşuna bas
+    for i = 1, 6 do
+        -- Police check before each key press
+        if detectPolice("Clothing") then return end
+        
+        game:GetService("VirtualInputManager"):SendKeyEvent(true, "F", false, game)
+        task.wait(1)
+    end
+    
+    -- Police check
+    if detectPolice("Clothing") then return end
+
+    -- Para toplama işlemi
+    if not collectMoney("Clothing") then
+        -- If interrupted by police detection in collectMoney
+        fixedY = -1.9
+                return
+            end
+    
+    -- Set lock after successful robbery
+    clothinglock = true
+    clothingLockTime = os.time()
+    fixedY = -1.9
+end
+
+function ToolRob()
+    -- Reset health tracking for this robbery
+    updateHealthTracking()
+    
+    -- Sağlık kontrolü yap, 25'in altındaysa reset
+    if checkHealthAndReset() then
+        -- Header fonksiyonunu tekrar başlat
+        header()
+        return
+    end
+    
+    task.wait(0.8)
+
+    -- Tool üstüne git
+    local tooltopframe = CFrame.new(-753.678833, 3.34990263, 594.156799, -0.0383914523, 6.95688504e-05, 0.99926275, -0.000679028803, 0.999999762, -9.57082884e-05, -0.999262571, -0.000682202575, -0.0383913964)
+    local tween = frameTween(tooltopframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.7)
+    
+    -- Police check
+    if detectPolice("Tool") then return end
+
+    -- Aşağı atla
+    game.Players.LocalPlayer.Character:WaitForChild("Humanoid").Sit = true
+    task.wait(0.5)
+
+    -- Tool içine git
+    local tooldownframe = CFrame.new(-756.316284, 5.49396896, 625.586731, -0.999889016, -4.14735197e-08, -0.0148986224, -4.2635353e-08, 1, 7.76650282e-08, 0.0148986224, 7.82916203e-08, -0.999889016)
+    tween = plrTween(tooldownframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Tool") then return end
+
+    -- 6 kez F tuşuna bas
+    for i = 1, 6 do
+        -- Police check before each key press
+        if detectPolice("Tool") then return end
+        
+        game:GetService("VirtualInputManager"):SendKeyEvent(true, "F", false, game)
+        task.wait(1)
+    end
+    
+    -- Police check
+    if detectPolice("Tool") then return end
+
+    -- Para toplama işlemi
+    if not collectMoney("Tool") then
+        -- If interrupted by police detection in collectMoney
+        return
+    end
+    
+    -- Set lock after successful robbery
+    toollock = true
+    toolLockTime = os.time()
+end
+
+function FarmRob()
+    -- Reset health tracking for this robbery
+    updateHealthTracking()
+    
+    -- Sağlık kontrolü yap, 25'in altındaysa reset
+    if checkHealthAndReset() then
+        -- Header fonksiyonunu tekrar başlat
+        header()
+        return
+    end
+    fixedY = 2
+    task.wait(0.8)
+
+    -- Farm üstüne git
+    local farmtopframe = CFrame.new(-1001.93323, 6.97521162, -1179.96838, 0.0886971056, 0.0129547976, -0.995974422, 0.0261870977, 0.999539435, 0.0153332772, 0.995714366, -0.0274416953, 0.0883170068)
+    local tween = frameTween(farmtopframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.7)
+    
+    -- Police check
+    if detectPolice("Farm") then return end
+
+    -- Aşağı atla
+    game.Players.LocalPlayer.Character:WaitForChild("Humanoid").Sit = true
+    task.wait(0.5)
+
+    -- Farm içine git
+    local farmdownframe = CFrame.new(-963.983215, 7.10850525, -1176.99902, -0.0078917807, -4.42466046e-08, -0.999968886, -5.80421791e-08, 1, -4.37899139e-08, 0.999968886, 5.76947912e-08, -0.0078917807)
+    tween = plrTween(farmdownframe)
+    if tween then tween.Completed:Wait() end
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Farm") then return end
+
+    -- 6 kez F tuşuna bas
+    for i = 1, 6 do
+        -- Police check before each key press
+        if detectPolice("Farm") then return end
+        
+        game:GetService("VirtualInputManager"):SendKeyEvent(true, "F", false, game)
+        task.wait(1)
+    end
+    
+    -- Police check
+    if detectPolice("Farm") then return end
+
+    -- Para toplama işlemi
+    if not collectMoney("Farm") then
+        -- If interrupted by police detection in collectMoney
+        fixedY = -1.9
+        return
+    end
+
+    -- Set lock after successful robbery
+    farmlock = true
+    farmLockTime = os.time()
+    fixedY = -1.9
+end
+
+function BankRob()
+    -- Reset health tracking for this robbery
+    updateHealthTracking()
+    
+    -- Sağlık kontrolü yap, 25'in altındaysa reset
+    if checkHealthAndReset() then
+        -- Header fonksiyonunu tekrar başlat
+        header()
+        return
+    end
+    
+    -- Banka üstüne git
+    local banktopframe = CFrame.new(-1301.02673, 6.98018074, 3141.53247, -0.383092284, 0.0222690497, -0.923441589, 0.0259819776, 0.999573588, 0.0133262994, 0.923344612, -0.0188876353, -0.38350752)
+    frameTween(banktopframe)
+    task.wait(1)
+    
+    -- Police check
+    if detectPolice("Bank") then return end
+
+    -- Otur
+    game.Players.LocalPlayer.Character:WaitForChild("Humanoid").Sit = true
+    task.wait(0.5)
+
+    -- Banka içine git
+    local bankdownframe = CFrame.new(-1242.57239, 7.74999905, 3142.53027, 0.998364091, -1.07074722e-08, 0.0571763404, 5.93541394e-09, 1, 8.36319458e-08, -0.0571763404, -8.31557614e-08, 0.998364091)
+    plrTween(bankdownframe)
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Bank") then return end
+
+    -- Bomba işlemleri
+    bombequip()
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Bank") then return end
+
+    if not placebomb() then
+        warn("Bomba yerleştirilemedi! İşlem iptal ediliyor.")
+        return
+    end
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Bank") then return end
+
+    -- Patlatma pozisyonuna git
+    local firePosition = CFrame.new(-1246.83044, 7.74999905, 3114.20996, 0.105045684, -1.03964783e-08, -0.994467378, -1.8315232e-08, 1, -1.23889574e-08, 0.994467378, 1.95153067e-08, 0.105045684)
+    plrTween(firePosition)
+    task.wait(0.5)
+    
+    -- Police check
+    if detectPolice("Bank") then return end
+
+    firebomb()
+    task.wait(3.2)
+    
+    -- Police check
+    if detectPolice("Bank") then return end
+
+    -- Kamera mesafesini kaydet
+    local oldMaxZoom = LocalPlayer.CameraMaxZoomDistance
+    LocalPlayer.CameraMaxZoomDistance = RobberyZoomValue
+
+    -- Toplama fonksiyonu
+    local function collectItems(folder)
+        local character = LocalPlayer.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+
+        local items = {}
+        for _, item in pairs(folder:GetChildren()) do
+            if item:IsA("MeshPart") and item.Transparency == 0 then
+                table.insert(items, {
+                    item = item,
+                    distance = (item.Position - rootPart.Position).Magnitude
+                })
+        end
+    end
+
+        table.sort(items, function(a, b)
+            return a.distance < b.distance
+        end)
+
+        for _, data in ipairs(items) do
+            -- Police check before each item collection
+            if detectPolice("Bank") then
+                -- Restore camera zoom
+                if oldMaxZoom > 0 then
+                    LocalPlayer.CameraMaxZoomDistance = oldMaxZoom
+                end
+        return
+    end
+
+            local item = data.item
+            if item and item.Transparency == 0 then
+                local itemPos = item.Position + Vector3.new(0, 3, 0)
+                plrTween(CFrame.new(itemPos))
+                task.wait(0.3)
+
+                local cam = workspace.CurrentCamera
+                cam.CFrame = CFrame.new(cam.CFrame.Position, item.Position)
+
+                -- E tuşuna bas
+                local vim = game:GetService("VirtualInputManager")
+                vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                task.wait(ProximityPromptTimeBet)
+                vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+
+                task.wait(0.2)
+                    end
+        end
+    end
+
+    -- Toplama işlemleri
+    local goldFolder = workspace:WaitForChild("Robberies"):WaitForChild("BankRobbery"):WaitForChild("Gold")
+    local moneyFolder = workspace:WaitForChild("Robberies"):WaitForChild("BankRobbery"):WaitForChild("Money")
+
+    collectItems(goldFolder)
+    collectItems(moneyFolder)
+
+    -- Kamera mesafesini eski haline getir
+    if oldMaxZoom > 0 then
+        LocalPlayer.CameraMaxZoomDistance = oldMaxZoom
+    end
+    
+    -- Set lock
+    banklock = true
+    bankLockTime = os.time()
+end
+
+
+
+
+-- Server hopper fonksiyonu
+local function hopServer()
+    print("🌐 [Sunucu Değiştirici] Başlatıldı.")
+
+    local TeleportService = game:GetService("TeleportService")
+    local HttpService = game:GetService("HttpService")
+    local currentServerId = game.JobId
+    local placeId = game.PlaceId
+
+    -- Sunucu listesini alma girişimi
+    local response = request({
+        Url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=Asc&limit=100",
+        Method = "GET"
+    })
+
+    if not response.Success then
+        print("⚠️ Sunucu listesi alınamadı, rastgele başka bir sunucuya geçiliyor...")
+        TeleportService:Teleport(placeId)
+        return false
+    end
+
+    local decoded
+    local success, err = pcall(function()
+        decoded = HttpService:JSONDecode(response.Body)
+    end)
+
+    if not success or not decoded or not decoded.data then
+        print("⚠️ Sunucu verisi JSON olarak çözümlenemedi!")
+        return false
+    end
+
+    -- Uygun bir hedef sunucu bul
+    local targetServerId = nil
+    for _, server in ipairs(decoded.data) do
+        if server.id ~= currentServerId and server.playing < server.maxPlayers then
+            targetServerId = server.id
+            break
+        end
+    end
+
+    if not targetServerId then
+        print("⚠️ Uygun sunucu bulunamadı! Muhtemelen dolular.")
+        return false
+    end
+
+    -- Teleport işlemi
+    print("🔁 Yeni sunucuya bağlanılıyor... Server ID:", targetServerId)
+
+    local teleportSuccess, teleportError = pcall(function()
+        TeleportService:TeleportToPlaceInstance(placeId, targetServerId)
+    end)
+
+    if not teleportSuccess then
+        print("❌ Teleport başarısız:", teleportError)
+        return false
+    end
+
+    return true
+end
+
+-- Basit kamera kontrol fonksiyonları
+local function lockCameraToTarget(target)
+    local camera = workspace.CurrentCamera
+    if target and target.Parent then
+        camera.CFrame = CFrame.new(camera.CFrame.Position, target.Position)
+        UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+        UserInputService.MouseIconEnabled = false
+    end
+end
+
+local function unlockCamera()
+    UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+    UserInputService.MouseIconEnabled = true
+end
+
+
+-- Function to update locks for robbery locations
+function updateLocks()
+    -- Check if enough time has passed to unlock locations
+    if clublock then
+        local currentTime = os.time()
+        if not clubLockTime then
+            clubLockTime = currentTime
+        elseif currentTime - clubLockTime >= locktime then
+            clublock = false
+            clubLockTime = nil
+            print("Club robbery unlocked!")
+        end
+    end
+
+    if banklock then
+        local currentTime = os.time()
+        if not bankLockTime then
+            bankLockTime = currentTime
+        elseif currentTime - bankLockTime >= locktime then
+            banklock = false
+            bankLockTime = nil
+            print("Bank robbery unlocked!")
+        end
+    end
+    
+    if gasngolock then
+        local currentTime = os.time()
+        if not gasngoLockTime then
+            gasngoLockTime = currentTime
+        elseif currentTime - gasngoLockTime >= locktime then
+            gasngolock = false
+            gasngoLockTime = nil
+            print("Gas-n-Go robbery unlocked!")
+        end
+    end
+    
+    if containergrelock then
+        local currentTime = os.time()
+        if not containergreLockTime then
+            containergreLockTime = currentTime
+        elseif currentTime - containergreLockTime >= locktime then
+            containergrelock = false
+            containergreLockTime = nil
+            print("Green Container robbery unlocked!")
+        end
+    end
+    
+    if containeryellock then
+        local currentTime = os.time()
+        if not containeryelLockTime then
+            containeryelLockTime = currentTime
+        elseif currentTime - containeryelLockTime >= locktime then
+            containeryellock = false
+            containeryelLockTime = nil
+            print("Yellow Container robbery unlocked!")
+        end
+    end
+
+    if toollock then
+        local currentTime = os.time()
+        if not toolLockTime then
+            toolLockTime = currentTime
+        elseif currentTime - toolLockTime >= locktime then
+            toollock = false
+            toolLockTime = nil
+            print("Tool Shop robbery unlocked!")
+        end
+    end
+    
+    if clothinglock then
+        local currentTime = os.time()
+        if not clothingLockTime then
+            clothingLockTime = currentTime
+        elseif currentTime - clothingLockTime >= locktime then
+            clothinglock = false
+            clothingLockTime = nil
+            print("Clothing Store robbery unlocked!")
+        end
+    end
+    
+    if areslock then
+        local currentTime = os.time()
+        if not aresLockTime then
+            aresLockTime = currentTime
+        elseif currentTime - aresLockTime >= locktime then
+            areslock = false
+            aresLockTime = nil
+            print("Ares robbery unlocked!")
+        end
+    end
+    
+    if farmlock then
+        local currentTime = os.time()
+        if not farmLockTime then
+            farmLockTime = currentTime
+        elseif currentTime - farmLockTime >= locktime then
+            farmlock = false
+            farmLockTime = nil
+            print("Farm robbery unlocked!")
+        end
+    end
+    
+    if ossolock then
+        local currentTime = os.time()
+        if not ossoLockTime then
+            ossoLockTime = currentTime
+        elseif currentTime - ossoLockTime >= locktime then
+            ossolock = false
+            ossoLockTime = nil
+            print("Osso robbery unlocked!")
+        end
+    end
+end
+
+-- Start the robbery system when the script runs
+print("🚀 Starting robbery system...")
+task.spawn(header)
